@@ -9,9 +9,11 @@ from typing import Any
 
 from fl_studio_mcp.bridge_client import IDEMPOTENT_READ_COMMANDS
 from fl_studio_mcp.bridge_install import expected_bridge_deployment
+from fl_studio_mcp.fork_removals import PRESET_SELECTION_REMOVED, FeatureRemovedError
 from fl_studio_mcp.performance import (
     TRACK_B_PRESET_MUTATION_COMMANDS,
     TRACK_B_PRESET_READ_COMMANDS,
+    TrackBBoundaryViolation,
     TrackBController,
     TrackBInspector,
     TrackBMutationGateway,
@@ -205,45 +207,26 @@ class PresetPerformanceTests(unittest.TestCase):
             [TARGET_FINGERPRINT, TARGET_FINGERPRINT],
         )
 
-    def test_controller_requires_verified_selection_receipt_and_preserves_target(self) -> None:
-        selection = {
-            "command": "plugin.select_preset",
-            **effect_fields(),
-            "preset_count": 3,
-            "requested_preset_name": "B",
-            "requested_preset_index": 1,
-            "before": {"name": "A", "index": 0, "identity_status": "stable"},
-            "after": {"name": "B", "index": 1, "identity_status": "stable"},
-            "outcome": "verified",
-            "verified": True,
-            "navigation_direction": "next",
-            "navigation_steps": 1,
-            "max_navigation_steps": 4,
-            "settle_tick_limit": 1,
-            "undo_point_created": False,
-            "session_fingerprint": SESSION,
-            "session_precondition_applied": True,
-            "expected_before_applied": True,
-            "project_saved": False,
-            "warnings": [],
-        }
-        client = Client({"plugin.select_preset": selection}, writable=True)
-        controller = TrackBController(TrackBMutationGateway(client))
-        receipt = controller.select_plugin_preset(
-            target=MixerEffectTarget(track_index=3, slot_index=0),
-            preset_name="B",
-            expected_current=ExpectedPluginPresetState(name="A", index=0),
-            session_fingerprint=SESSION,
-            target_fingerprint=TARGET_FINGERPRINT,
-            max_navigation_steps=4,
-        )
-        self.assertTrue(receipt.verified)
-        self.assertEqual(receipt.after.name, "B")
-        command, arguments = client.calls[0]
-        self.assertEqual(command, "plugin.select_preset")
-        self.assertEqual(arguments["expected_before"], {"name": "A", "index": 0})
-        self.assertEqual(arguments["target_kind"], "mixer_effect")
-        self.assertEqual(arguments["target_fingerprint"], TARGET_FINGERPRINT)
+    def test_preset_selection_refuses_before_any_bridge_call(self) -> None:
+        """Tested feature: the server cannot select a plug-in preset, because this fork removed preset selection.
+        Check: the controller's select_plugin_preset raises FeatureRemovedError, and the mutation gateway refuses plugin.select_preset, with no bridge call either way.
+        Mocks: the bridge client, replaced with a recording fake that would accept the selection.
+        Test would be deprecated if: this fork restores preset selection.
+        """
+        client = Client({"plugin.select_preset": {"verified": True}}, writable=True)
+        gateway = TrackBMutationGateway(client)
+        with self.assertRaises(FeatureRemovedError) as refused:
+            TrackBController(gateway).select_plugin_preset(
+                target=MixerEffectTarget(track_index=3, slot_index=0),
+                preset_name="B",
+                expected_current=ExpectedPluginPresetState(name="A", index=0),
+                session_fingerprint=SESSION,
+                max_navigation_steps=4,
+            )
+        self.assertEqual(str(refused.exception), PRESET_SELECTION_REMOVED)
+        with self.assertRaisesRegex(TrackBBoundaryViolation, "mutation allowlist"):
+            gateway.call("plugin.select_preset", preset_name="B")
+        self.assertEqual(client.calls, [])
 
     def test_loop_starter_controller_keeps_dispatch_separate_from_preset_proof(self) -> None:
         response = {
@@ -282,113 +265,22 @@ class PresetPerformanceTests(unittest.TestCase):
         })
 
     def test_command_allowlists_and_client_replay_boundary_are_explicit(self) -> None:
+        """Tested feature: preset reads stay allowed and replayable, while preset selection is in no allowlist.
+        Check: the read commands are in the read and replay allowlists, Loop Starter rerolls stay mutations that are never replayed, and plugin.select_preset is in neither list.
+        Mocks: none.
+        Test would be deprecated if: the preset command allowlists are removed.
+        """
         self.assertIn("plugin.presets", TRACK_B_PRESET_READ_COMMANDS)
         self.assertIn("plugin.current_preset", TRACK_B_PRESET_READ_COMMANDS)
         self.assertIn("plugin.pad_map", TRACK_B_PRESET_READ_COMMANDS)
-        self.assertIn("plugin.select_preset", TRACK_B_PRESET_MUTATION_COMMANDS)
+        self.assertNotIn("plugin.select_preset", TRACK_B_PRESET_MUTATION_COMMANDS)
+        self.assertNotIn("plugin.select_preset", TrackBMutationGateway.ALLOWED_COMMANDS)
         self.assertIn("channels.rerollLoopStarterLoop", TRACK_B_PRESET_MUTATION_COMMANDS)
         self.assertIn("plugin.presets", IDEMPOTENT_READ_COMMANDS)
         self.assertIn("plugin.current_preset", IDEMPOTENT_READ_COMMANDS)
         self.assertIn("plugin.pad_map", IDEMPOTENT_READ_COMMANDS)
         self.assertNotIn("plugin.select_preset", IDEMPOTENT_READ_COMMANDS)
         self.assertNotIn("channels.rerollLoopStarterLoop", IDEMPOTENT_READ_COMMANDS)
-
-    def test_controller_rejects_a_mismatched_returned_target_fingerprint(self) -> None:
-        selection = {
-            "command": "plugin.select_preset",
-            **effect_fields(),
-            "target_fingerprint": "c" * 64,
-            "preset_count": 3,
-            "requested_preset_name": "B",
-            "requested_preset_index": 1,
-            "before": {"name": "A", "index": 0, "identity_status": "stable"},
-            "after": {"name": "B", "index": 1, "identity_status": "stable"},
-            "outcome": "verified",
-            "verified": True,
-            "navigation_direction": "next",
-            "navigation_steps": 1,
-            "max_navigation_steps": 4,
-            "settle_tick_limit": 1,
-            "undo_point_created": False,
-            "session_fingerprint": SESSION,
-            "session_precondition_applied": False,
-            "expected_before_applied": False,
-            "project_saved": False,
-            "warnings": [],
-        }
-        client = Client({"plugin.select_preset": selection}, writable=True)
-        controller = TrackBController(TrackBMutationGateway(client))
-        with self.assertRaises(ValueError):
-            controller.select_plugin_preset(
-                target=MixerEffectTarget(track_index=3, slot_index=0),
-                preset_name="B",
-                target_fingerprint=TARGET_FINGERPRINT,
-                max_navigation_steps=4,
-            )
-
-    def test_controller_rejects_a_mismatched_echoed_request(self) -> None:
-        selection = {
-            "command": "plugin.select_preset",
-            **effect_fields(),
-            "preset_count": 3,
-            "requested_preset_name": "B",
-            "requested_preset_index": 1,
-            "before": {"name": "A", "index": 0, "identity_status": "stable"},
-            "after": {"name": "B", "index": 1, "identity_status": "stable"},
-            "outcome": "verified",
-            "verified": True,
-            "navigation_direction": "next",
-            "navigation_steps": 1,
-            "max_navigation_steps": 4,
-            "settle_tick_limit": 1,
-            "undo_point_created": False,
-            "session_fingerprint": SESSION,
-            "session_precondition_applied": False,
-            "expected_before_applied": False,
-            "project_saved": False,
-            "warnings": [],
-        }
-        client = Client({"plugin.select_preset": selection}, writable=True)
-        controller = TrackBController(TrackBMutationGateway(client))
-        with self.assertRaises(ValueError):
-            controller.select_plugin_preset(
-                target=MixerEffectTarget(track_index=3, slot_index=0),
-                preset_name="C",
-                max_navigation_steps=4,
-            )
-
-    def test_controller_rejects_a_before_state_that_violates_expected_current(self) -> None:
-        selection = {
-            "command": "plugin.select_preset",
-            **effect_fields(),
-            "preset_count": 3,
-            "requested_preset_name": "B",
-            "requested_preset_index": 1,
-            "before": {"name": "C", "index": 2, "identity_status": "stable"},
-            "after": {"name": "B", "index": 1, "identity_status": "stable"},
-            "outcome": "verified",
-            "verified": True,
-            "navigation_direction": "next",
-            "navigation_steps": 1,
-            "max_navigation_steps": 4,
-            "settle_tick_limit": 1,
-            "undo_point_created": False,
-            "session_fingerprint": SESSION,
-            "session_precondition_applied": True,
-            "expected_before_applied": True,
-            "project_saved": False,
-            "warnings": [],
-        }
-        client = Client({"plugin.select_preset": selection}, writable=True)
-        controller = TrackBController(TrackBMutationGateway(client))
-        with self.assertRaises(ValueError):
-            controller.select_plugin_preset(
-                target=MixerEffectTarget(track_index=3, slot_index=0),
-                preset_name="B",
-                expected_current=ExpectedPluginPresetState(name="A", index=0),
-                session_fingerprint=SESSION,
-                max_navigation_steps=4,
-            )
 
 
 if __name__ == "__main__":

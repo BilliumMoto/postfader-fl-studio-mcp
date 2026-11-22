@@ -97,6 +97,17 @@ class Client:
         raise AssertionError("timeout on %s" % cmd)
 
 
+def start_tcp_fake_bridge():
+    """Start the bridge's TCP transport directly as this file's fake FL link.
+
+    The FL script's own startup builds only MIDI, so these checks construct
+    the TCP transport themselves instead of calling OnInit.
+    """
+    transport = bridge._SocketTransport()
+    transport.start()
+    bridge._transport = transport
+
+
 def main():
     _state.reset()
     step_grid = [False] * 256
@@ -110,7 +121,7 @@ def main():
         step_grid.__setitem__(position, bool(value))
     )
     instrument()
-    bridge.OnInit()
+    start_tcp_fake_bridge()
     bridge.OnIdle()
     port = bridge._transport.server.getsockname()[1]
     c = Client(port)

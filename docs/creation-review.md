@@ -1,5 +1,7 @@
 # Creation Review, Revision, and Delivery
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 Creation Review connects a completed Production Run to one or more bounces that
 the user exported from FL Studio. It measures the supplied audio, keeps direct
 producer feedback as the highest-authority taste signal, compiles one bounded

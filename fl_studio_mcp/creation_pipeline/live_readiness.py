@@ -208,6 +208,15 @@ def _piano_roll_readiness(operations: Sequence[object]) -> PianoRollReadiness:
             required=required,
             warnings=(f"Piano Roll setup could not be inspected: {exc}",),
         )
+    if status.removed:
+        # This fork removed Piano Roll scripting: no setup step can arm it, so
+        # report the removal instead of a manual action. Readiness evaluation
+        # still blocks a plan that needs it, because nothing here is armed or
+        # supported.
+        return PianoRollReadiness(
+            required=required,
+            warnings=(status.setup_instruction,) if required else (),
+        )
     manual_action = None
     if required and not status.armed_this_session:
         from .models import ReadinessManualAction

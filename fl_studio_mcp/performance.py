@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 
 from .bridge_client import BridgeError, get_client
 from .contracts import ConnectionInfo, display_value_in_unit, normalize_display_unit
+from .fork_removals import PRESET_SELECTION_REMOVED, FeatureRemovedError
 from .readonly_inspector import IncompatibleFLStudio, connection_from_ping
 from .track_b_contracts import (
     FL_COLOR_WORD_MAX,
@@ -192,9 +193,10 @@ TRACK_B_PRESET_READ_COMMANDS = frozenset(
         "plugin.pad_map",
     }
 )
+# This fork removed preset selection, so plugin.select_preset is not here and
+# the mutation gateway refuses it. Loop Starter rerolls are not presets.
 TRACK_B_PRESET_MUTATION_COMMANDS = frozenset(
     {
-        "plugin.select_preset",
         "channels.rerollLoopStarterLoop",
     }
 )
@@ -1512,7 +1514,13 @@ class TrackBController(_ConnectionController):
         max_navigation_steps: int = 64,
         settle_tick_limit: int = 1,
     ) -> VerifiedPluginPresetSelection:
-        """Select an exact preset and require a later-tick identity readback."""
+        """Refuse: this fork removed preset selection.
+
+        This was the one server path that sends plugin.select_preset. It now
+        raises before any bridge call; the body below is kept, unreachable,
+        so upstream changes to it still merge.
+        """
+        raise FeatureRemovedError(PRESET_SELECTION_REMOVED)
         resolved = normalize_plugin_target(
             target=target,
             track_index=track_index,

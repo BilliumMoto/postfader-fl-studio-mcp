@@ -1,5 +1,7 @@
 # Canonical distribution metadata
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 This page is the reusable source of truth for directory listings, package
 indexes, community catalogs, and maintained software lists. Copy the metadata
 without strengthening its claims. A listing is not evidence that a directory

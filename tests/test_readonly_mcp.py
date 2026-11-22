@@ -6,9 +6,7 @@ import asyncio
 import copy
 import json
 import os
-import shutil
 import sys
-import tempfile
 import threading
 import time
 
@@ -40,8 +38,29 @@ from mcp.client.stdio import stdio_client  # noqa: E402
 
 
 STOP = threading.Event()
-MAILBOX = tempfile.mkdtemp(prefix="flmcp-readonly-e2e-")
 BRIDGE_PORT = None
+# The server builds only the MIDI transport, which this offline test never
+# opens. The child therefore starts the real server with its bridge client
+# given the TCP transport instead, connected to this process's fake bridge.
+SERVER_WITH_TCP_FAKE = """
+import sys
+from fl_studio_mcp import bridge_client
+
+_init = bridge_client.BridgeClient.__init__
+
+
+def _init_with_tcp_fake(self, *args, **kwargs):
+    _init(self, *args, **kwargs)
+    self._transports = [
+        bridge_client._TcpTransport("127.0.0.1", %d, self.timeout)
+    ]
+
+
+bridge_client.BridgeClient.__init__ = _init_with_tcp_fake
+from fl_studio_mcp.mcp_server import main
+
+sys.exit(main([]))
+"""
 
 EXPECTED_RESOURCES = {
     "fl://capabilities",
@@ -118,16 +137,21 @@ WRITE_CALLS = {
     },
     "channel_play_note": {"channel_index": 0, "note": 60, "velocity": 100},
 }
-PRESET_WRITE_CALLS = {
-    "plugin_select_preset": {
-        "target": {"kind": "mixer_effect", "track_index": 3, "slot_index": 1},
-        "preset_name": "Preset 1",
-    },
-}
+
+
+def start_tcp_fake_bridge():
+    """Start the bridge's TCP transport directly as this file's fake FL link.
+
+    The FL script's own startup builds only MIDI, so these checks construct
+    the TCP transport themselves instead of calling OnInit.
+    """
+    transport = bridge._SocketTransport()
+    transport.start()
+    bridge._transport = transport
 
 
 def pump_bridge():
-    bridge.OnInit()
+    start_tcp_fake_bridge()
     while not STOP.is_set():
         bridge.OnIdle()
         time.sleep(0.005)
@@ -204,6 +228,11 @@ def fingerprint():
 
 
 async def run():
+    """Tested feature: the default server over stdio reads the project and refuses every write without changing FL.
+    Check: a real MCP client lists tools and resources, calls the read tools, and sees each write tool refused, against a fake bridge whose state is fingerprinted before and after.
+    Mocks: the fake FL modules in tests/fakefl, and the server's bridge client given a TCP transport to that fake in place of MIDI.
+    Test would be deprecated if: the server's default read-only and write-refusal behavior is removed.
+    """
     if BRIDGE_PORT is None:
         raise RuntimeError("ephemeral fake-bridge port was not captured")
     _state.REC_PPQ = 192
@@ -213,13 +242,11 @@ async def run():
     before = fingerprint()
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "fl_studio_mcp.mcp_server"],
+        args=["-c", SERVER_WITH_TCP_FAKE % BRIDGE_PORT],
         cwd=ROOT,
         env={
             **os.environ,
             "PYTHONPATH": ROOT,
-            "FL_BRIDGE_PORT": str(BRIDGE_PORT),
-            "FL_BRIDGE_MAILBOX": MAILBOX,
             "FL_BRIDGE_ENABLE_MIDI": "0",
         },
     )
@@ -233,9 +260,7 @@ async def run():
                 initialized.server_info,
             )
             tools = (await session.list_tools()).tools
-            missing = (set(WRITE_CALLS) | set(PRESET_WRITE_CALLS)) - {
-                tool.name for tool in tools
-            }
+            missing = set(WRITE_CALLS) - {tool.name for tool in tools}
             check(
                 "every write tool exercised below is listed over stdio",
                 not missing,
@@ -414,24 +439,6 @@ async def run():
                     text,
                 )
 
-            # Exact preset selection is a verified project mutation too, but
-            # its contract has preset identity guards rather than the generic
-            # expected-before field used by the older write set.
-            for name, arguments in PRESET_WRITE_CALLS.items():
-                refusal = await session.call_tool(name, arguments)
-                text = " ".join(
-                    block.text
-                    for block in refusal.content
-                    if getattr(block, "type", None) == "text"
-                )
-                check(
-                    "%s refused before write mode was enabled" % name,
-                    bool(getattr(refusal, "is_error", False))
-                    and "session_set_write_mode" in text
-                    and "confirm_user_present=true" in text,
-                    text,
-                )
-
             # Palette application must fail closed on missing conversational
             # authorization before it can resolve a process-local plan or
             # reach any FL write boundary.
@@ -522,7 +529,6 @@ async def run():
 def main():
     global BRIDGE_PORT
     _state.reset()
-    bridge.MAILBOX = MAILBOX
     thread = threading.Thread(target=pump_bridge, daemon=True)
     thread.start()
     time.sleep(0.3)
@@ -534,7 +540,6 @@ def main():
     finally:
         STOP.set()
         thread.join(timeout=2)
-        shutil.rmtree(MAILBOX, ignore_errors=True)
     return summary()
 
 

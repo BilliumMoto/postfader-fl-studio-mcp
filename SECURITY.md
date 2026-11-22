@@ -1,5 +1,7 @@
 # Security policy
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](FORK.md).
+
 PostFader is intended for a trusted, single-user macOS or Windows workstation.
 It is not designed as a remote service, a multi-user control plane, or a
 security boundary between mutually untrusted local processes.
@@ -42,9 +44,10 @@ The intended deployment contains four components:
    WinMM on Windows; and
 4. the FL Studio MIDI controller script.
 
-The server and bridge implement no hosted service and no telemetry. Test
-transports can use loopback or a local file mailbox; production FL Studio
-communication uses MIDI SysEx over the explicitly selected virtual endpoint.
+The server and bridge implement no hosted service and no telemetry. This
+fork builds only the MIDI transport: FL Studio communication uses MIDI SysEx
+over the explicitly selected virtual endpoint. The loopback and file mailbox
+transport classes remain only as deterministic test fakes.
 PostFader does not install, configure, authenticate, or endorse a virtual MIDI
 provider.
 
@@ -198,18 +201,12 @@ paths in prompts.
 
 Creative file tools can also write caller-selected Type-1 MIDI paths. Existing
 files are refused unless the request explicitly sets `overwrite=true`; the
-result is reopened and parsed before success is reported. Piano Roll tools
-atomically replace one generated `Postfader_Apply.pyscript` beneath the FL
-Studio user-data tree, or beneath the absolute
-`POSTFADER_PIANO_ROLL_SCRIPTS_DIR` override. Treat both locations as writable
-capabilities granted to the MCP client.
-
-Automatic Piano Roll application focuses the local FL Studio window and sends
-the platform run-last-script shortcut. It is disabled until a user manually
-runs the prepared bootstrap and confirms that fact for the current MCP
-process. Focus and key dispatch are reported separately and do not prove that
-FL applied any note change. Do not use automatic dispatch on an untrusted or
-shared desktop session.
+result is reopened and parsed before success is reported. This fork removed
+Piano Roll scripting: it writes no `Postfader_Apply.pyscript` and never sends
+FL Studio the Piano Roll run-script shortcut. Other tools are unchanged: on
+macOS, `plugin_list_available` and `plugin_load` still drive FL Studio's menus
+through System Events, which focuses FL Studio and sends it keystrokes (see
+[FORK.md](FORK.md)).
 
 ## Security invariants
 

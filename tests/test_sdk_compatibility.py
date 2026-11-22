@@ -134,6 +134,13 @@ class MCPCompatibilityTests(unittest.TestCase):
         self.assertLess(sum(sizes.values()), 2_200_000)
 
     def test_operation_schemas_are_served_on_demand(self) -> None:
+        """Tested feature: run_describe_operations lists the operations agents can use and serves exact schemas on request, with removed ones reported as unavailable.
+        Check: the listed operations equal the run tools' advertised enum, only requested schemas are included and validate, and the five removed operations appear only as unavailable, each with its removal reason, and cannot be described.
+        Mocks: none.
+        Test would be deprecated if: run_describe_operations or the fork's removal of those operations goes away.
+        """
+        from fl_studio_mcp import production_runs, tool_schemas
+
         tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
         plan = tools["run_execute"].input_schema["$defs"]["ProductionRunPlan"]
         advertised = plan["properties"]["operations"]["items"]["properties"]["operation"]["enum"]
@@ -146,12 +153,63 @@ class MCPCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             [name for name, item in listed.items() if not item["summary"].endswith(".")], []
         )
-        self.assertIsNone(listed["write_note_sequence"]["json_schema"])
+        self.assertIsNone(listed["select_pattern"]["json_schema"])
+        removed = set(production_runs.REMOVED_FEATURE_OPERATION_MESSAGES)
+        self.assertEqual(
+            removed,
+            {
+                "write_note_sequence",
+                "transform_piano_roll",
+                "select_plugin_preset",
+                "select_drum_kit",
+                "apply_creation_revision",
+            },
+        )
+        self.assertEqual(removed & set(listed), set())
+        self.assertEqual(removed & set(advertised), set())
+        catalog = result.structured_content
+        self.assertLessEqual(removed, set(catalog["unavailable_operations"]))
+        self.assertIn("save_project", catalog["unavailable_operations"])
+        for name in removed:
+            self.assertEqual(
+                catalog["unavailable_reasons"][name],
+                production_runs.REMOVED_FEATURE_OPERATION_MESSAGES[name],
+            )
+        self.assertEqual(
+            set(catalog["unavailable_reasons"]), set(catalog["unavailable_operations"])
+        )
+        with self.assertRaisesRegex(ValueError, "unavailable.*write_note_sequence"):
+            tool_schemas.describe_operations(("write_note_sequence",))
 
         validator = Draft202012Validator(listed["generate_melody"]["json_schema"])
         operation = {"operation": "generate_melody", "operation_id": "melody-1", "bars": 8}
         validator.validate(operation)
         self.assertTrue(list(validator.iter_errors({**operation, "bar_count": 8})))
+
+    def test_removed_transport_setting_reaches_the_client_as_advice(self) -> None:
+        """Tested feature: a tool call made while a removed transport's setting is set returns the advice to unset it, not an opaque error.
+        Check: with FL_BRIDGE_HOST set, session_get_capabilities fails with the unset-and-restart advice; with it unset and a fresh bridge client, as after a restart, the same call returns the normal offline result.
+        Mocks: the process-wide bridge client, reset so each call builds a fresh one; MIDI stays disabled.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        import os
+
+        from fl_studio_mcp import bridge_client
+
+        with (
+            mock.patch.object(bridge_client, "_client", None),
+            mock.patch.object(bridge_client, "MIDI_ENABLED", False),
+        ):
+            with mock.patch.dict(os.environ, {"FL_BRIDGE_HOST": "127.0.0.1"}):
+                with self.assertRaisesRegex(
+                    Exception, "Unset it and restart the MCP server"
+                ):
+                    asyncio.run(mcp.call_tool("session_get_capabilities", {}))
+            os.environ.pop("FL_BRIDGE_HOST", None)
+            bridge_client._client = None
+            result = asyncio.run(mcp.call_tool("session_get_capabilities", {}))
+        connection = result.structured_content["connection"]
+        self.assertFalse(connection["connected"])
 
     def test_every_contract_model_rejects_unknown_fields(self) -> None:
         models = set()
@@ -319,21 +377,6 @@ class MCPCompatibilityTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(Exception, "Extra inputs are not permitted"):
                     asyncio.run(invoke())
-
-    def test_note_pagination_rejects_invalid_bounds_before_adapter(self) -> None:
-        with mock.patch.object(
-            server_module, "read_piano_roll_notes",
-            side_effect=AssertionError("invalid SDK input must never reach FL inspection"),
-        ) as adapter:
-            for invalid_page in (
-                {"offset": -1}, {"offset": 1_000_001},
-                {"limit": 0}, {"limit": 2049},
-            ):
-                with self.subTest(page=invalid_page), self.assertRaises(Exception):
-                    asyncio.run(mcp.call_tool("piano_roll_read_notes", {
-                        "channel_index": 0, "pattern_number": 1, **invalid_page,
-                    }))
-                adapter.assert_not_called()
 
     def test_render_request_rejects_unknown_nested_options_before_adapter(self) -> None:
         with mock.patch.object(

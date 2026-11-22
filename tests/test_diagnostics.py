@@ -265,6 +265,46 @@ class DoctorEvidenceTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(json.loads(stdout.getvalue()), evidence)
 
+    def test_removed_transport_setting_is_reported_with_accurate_advice(self):
+        """Tested feature: the doctor reports a removed transport's setting as the cause, with advice to unset it, rather than blaming FL Studio.
+        Check: with FL_BRIDGE_PORT set, the doctor's real live probe fails with removed_transport_setting and the unset advice; after unsetting it and rerunning, that failure is gone and only the offline bridge failure remains.
+        Mocks: the doctor's MIDI port enumeration, a fake FL user-data folder and FL executable, and MIDI kept disabled so the real live probe opens nothing.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        from fl_studio_mcp import bridge_client
+
+        values = {"FL_BRIDGE_MIDI_PORT": "Chosen Port"}
+        ports = {"in": ["Chosen Port"], "out": ["Chosen Port"]}
+
+        def run_doctor():
+            return diagnostics.collect_evidence(
+                user_data_dir=self.user_data,
+                platform_name="win32",
+                environ=values,
+                fl_candidates=[self.fl_candidate],
+                midi_probe=lambda: ports,
+            )
+
+        with (
+            mock.patch.object(bridge_client, "MIDI_ENABLED", False),
+            mock.patch.dict(os.environ, {"FL_BRIDGE_ENABLE_MIDI": "0"}),
+        ):
+            with mock.patch.dict(os.environ, {"FL_BRIDGE_PORT": "20202"}):
+                refused = run_doctor()
+            os.environ.pop("FL_BRIDGE_PORT", None)
+            rerun = run_doctor()
+
+        failures = {item["code"]: item for item in refused["failures"]}
+        self.assertEqual(refused["overall"], "fail")
+        self.assertIn("removed_transport_setting", failures)
+        self.assertIn("FL_BRIDGE_PORT", failures["removed_transport_setting"]["message"])
+        self.assertIn("Unset FL_BRIDGE_HOST", failures["removed_transport_setting"]["action"])
+        self.assertNotIn("live_bridge_unavailable", failures)
+
+        rerun_codes = {item["code"] for item in rerun["failures"]}
+        self.assertNotIn("removed_transport_setting", rerun_codes)
+        self.assertEqual(rerun_codes, {"live_bridge_unavailable"})
+
     def test_custom_absolute_executable_is_reported_as_explicit(self):
         custom = Path(self.tmp.name) / "Custom Image-Line" / "FL64.exe"
         custom.parent.mkdir(parents=True)
@@ -430,6 +470,28 @@ class DoctorEvidenceTests(unittest.TestCase):
             diagnostics.main(["--json", "--midi-port", "Exact Fixture Port"])
         self.assertEqual(captured["FL_BRIDGE_ENABLE_MIDI"], "1")
         self.assertEqual(captured["FL_BRIDGE_MIDI_PORT"], "Exact Fixture Port")
+
+
+class NativeMidiProbeTests(unittest.TestCase):
+    def test_native_midi_probe_child_opens_no_console_window(self):
+        """Tested feature: the doctor's MIDI port probe child opens no console window on Windows.
+        Check: the probe passes CREATE_NO_WINDOW on Windows, or 0 elsewhere, as the child's creation flags, and returns the ports it printed.
+        Mocks: subprocess.run, so no child is started.
+        Test would be deprecated if: the doctor stops probing MIDI ports in a child process.
+        """
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout='{"in": ["A"], "out": ["B"]}', stderr=""
+        )
+        with mock.patch.object(
+            diagnostics.subprocess, "run", return_value=completed
+        ) as run:
+            ports = diagnostics._native_midi_probe()
+        self.assertEqual(ports, {"in": ["A"], "out": ["B"]})
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
 
 if __name__ == "__main__":

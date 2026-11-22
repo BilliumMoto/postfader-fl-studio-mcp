@@ -102,6 +102,9 @@ def _native_midi_probe() -> Mapping[str, Sequence[object]]:
         text=True,
         timeout=10,
         check=False,
+        # The probe child is a console program; on Windows, keep it from
+        # opening a console window of its own.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip().splitlines()
@@ -436,7 +439,24 @@ def collect_evidence(
     try:
         live_value = dict((live_probe or _default_live_probe)())
     except Exception as exc:
+        # Imported only now: importing bridge_client fixes its MIDI setting,
+        # which _default_live_probe sets first.
+        from .bridge_client import RemovedTransportSettingsError
+
         live["status"] = "unavailable"
+        if isinstance(exc, RemovedTransportSettingsError):
+            # The doctor never reached FL Studio: a removed transport's
+            # setting stopped the bridge client. test_diagnostics follows
+            # this advice by rerunning the doctor without the setting.
+            _failure(
+                result,
+                "removed_transport_setting",
+                str(exc),
+                "Unset FL_BRIDGE_HOST, FL_BRIDGE_PORT and FL_BRIDGE_MAILBOX "
+                "for the doctor and the MCP server, then rerun the doctor.",
+            )
+            result["overall"] = "fail"
+            return result
         _failure(
             result,
             "live_bridge_unavailable",

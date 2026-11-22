@@ -1,5 +1,7 @@
 # PostFader FAQ
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 Short answers about PostFader, the FL Studio MCP server. For step-by-step
 installation, see the [setup guide](setup.md).
 
@@ -86,8 +88,8 @@ PostFader can't listen in real time.
 
 On macOS, yes: it adds instruments and effects from FL Studio's Add menu. That
 needs Accessibility access for the app that runs PostFader, English menus, and
-write mode. On Windows, load plug-ins yourself; PostFader can then read and set
-their parameters and presets.
+write mode. On Windows, load plug-ins yourself; PostFader can then read their
+presets and set their parameters.
 
 ### Can it render or save my song?
 
@@ -104,10 +106,8 @@ See [FL Studio limits](fl-constraints.md).
 
 ### Does it work on Piano Roll notes?
 
-Yes. It can read notes, write new ones, and quantize, transpose, humanize,
-duplicate, delete, or clear them. FL Studio runs Piano Roll scripts separately,
-so once per PostFader session you run **Scripts → Postfader → Postfader
-Apply** in a Piano Roll window when the AI asks.
+Not in this fork, which removed Piano Roll scripting. It can still generate
+parts and export them as MIDI files. See [FORK.md](../FORK.md).
 
 ## Safety and privacy
 

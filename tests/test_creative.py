@@ -29,6 +29,10 @@ import device_UniversalBridge as bridge  # noqa: E402
 
 from fl_studio_mcp import creative as creative_module  # noqa: E402
 from fl_studio_mcp.bridge_install import expected_bridge_deployment  # noqa: E402
+from fl_studio_mcp.fork_removals import (  # noqa: E402
+    PIANO_ROLL_REMOVED,
+    FeatureRemovedError,
+)
 from fl_studio_mcp.creative import (  # noqa: E402
     PIANO_ROLL,
     CreativeNote,
@@ -319,55 +323,6 @@ class CreativeTests(unittest.TestCase):
                     export_type1_midi(str(path), [track], overwrite=False)
             self.assertFalse(path.exists())
 
-    def test_piano_roll_script_setup_and_manual_dispatch_are_honest(self) -> None:
-        notes = [CreativeNote(pitch=60, start_beats=0, duration_beats=1)]
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"POSTFADER_PIANO_ROLL_SCRIPTS_DIR": directory},
-            clear=False,
-        ):
-            prepared = PIANO_ROLL.bridge_action("prepare")
-            self.assertTrue(prepared.script_exists)
-            self.assertFalse(prepared.armed_this_session)
-            with self.assertRaises(ValueError):
-                PIANO_ROLL.bridge_action("confirm")
-            run_prepared_piano_roll_script(prepared.script_path)
-            armed = PIANO_ROLL.bridge_action(
-                "confirm", confirm_user_ran_script=True
-            )
-            self.assertTrue(armed.armed_this_session)
-
-            manual = write_piano_roll_notes(
-                notes,
-                channel_index=2,
-                pattern_number=3,
-                mode="replace",
-                auto_trigger=False,
-            )
-            source = Path(manual.script_path).read_text(encoding="ascii")
-            self.assertEqual(manual.status, "prepared_for_manual_run")
-            self.assertFalse(manual.application_verified)
-            self.assertIn("score.clearNotes(True)", source)
-            self.assertIn("score.addNote(note)", source)
-            compile(source, "Postfader_Apply.pyscript", "exec")
-
-            transform = transform_piano_roll(
-                PianoRollTransform(
-                    operation="humanize",
-                    scope="selected",
-                    timing_beats=0.03,
-                    velocity_amount=0.08,
-                    seed=91,
-                ),
-                channel_index=2,
-                pattern_number=3,
-                auto_trigger=False,
-            )
-            self.assertEqual(transform.status, "prepared_for_manual_run")
-            transform_source = Path(transform.script_path).read_text("ascii")
-            self.assertIn('operation == "humanize"', transform_source)
-            compile(transform_source, "Postfader_Apply.pyscript", "exec")
-
     def test_piano_roll_receipt_uses_exclusive_direct_final_binary_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             receipt_path = Path(directory) / "arm.json"
@@ -524,72 +479,6 @@ class CreativeTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "must be an absolute"):
                     piano_roll_scripts_directory()
-
-    def test_macos_piano_roll_shortcut_targets_fl_studio_process(self) -> None:
-        completed = mock.Mock(returncode=0, stderr="")
-        with (
-            mock.patch.dict(os.environ, {"FL_BRIDGE_SANDBOXED": "0"}),
-            mock.patch.object(
-                creative_module, "_platform_label", return_value="macos"
-            ),
-            mock.patch.object(
-                creative_module.subprocess, "run", return_value=completed
-            ) as run,
-        ):
-            dispatch = creative_module._trigger_piano_roll_shortcut()
-
-        self.assertTrue(dispatch.hotkey_dispatched)
-        run.assert_called_once()
-        command = run.call_args.args[0]
-        self.assertEqual(command[:2], ["osascript", "-e"])
-        script = command[2]
-        self.assertIn('tell application "System Events"', script)
-        self.assertIn('tell process "FL Studio"', script)
-        self.assertIn("set frontmost to true", script)
-        self.assertIn("delay 0.4", script)
-        self.assertIn(
-            'keystroke "y" using {command down, option down}', script
-        )
-        self.assertNotIn('tell application "FL Studio" to activate', script)
-
-    def test_piano_roll_auto_trigger_reports_dispatch_not_application(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"POSTFADER_PIANO_ROLL_SCRIPTS_DIR": directory},
-            clear=False,
-        ):
-            PIANO_ROLL.bridge_action("prepare")
-            run_prepared_piano_roll_script(
-                PIANO_ROLL.status().script_path
-            )
-            PIANO_ROLL.bridge_action("confirm", confirm_user_ran_script=True)
-            with (
-                mock.patch("fl_studio_mcp.creative._target_piano_roll", return_value=target_receipt()),
-                mock.patch(
-                    "fl_studio_mcp.creative._trigger_piano_roll_shortcut",
-                    return_value=HotkeyDispatch(
-                        platform="macos",
-                        shortcut="Cmd+Opt+Y",
-                        fl_window_found=True,
-                        fl_window_focused=True,
-                        hotkey_dispatched=True,
-                    ),
-                ),
-                mock.patch(
-                    "fl_studio_mcp.creative._await_piano_roll_receipt",
-                    return_value=(None, "Synthetic missing receipt."),
-                ),
-            ):
-                receipt = write_piano_roll_notes(
-                    [CreativeNote(pitch=67, start_beats=0, duration_beats=2)],
-                    channel_index=2,
-                    pattern_number=3,
-                    auto_trigger=True,
-                )
-        self.assertEqual(receipt.status, "hotkey_dispatched_unverified")
-        self.assertTrue(receipt.target.selected_target_verified)
-        self.assertTrue(receipt.trigger.hotkey_dispatched)
-        self.assertFalse(receipt.application_verified)
 
     def test_piano_roll_script_runtime_receipt_verifies_exact_score_delta(self) -> None:
         class FakeNote:
@@ -771,98 +660,6 @@ class CreativeTests(unittest.TestCase):
             creative_module._runtime_note_digest([deselected], ppq=96),
         )
 
-    def test_authenticated_script_runtime_evidence_verifies_dispatch(self) -> None:
-        notes = [CreativeNote(pitch=67, start_beats=0, duration_beats=2)]
-        digest = creative_module.note_digest(notes)
-        evidence = creative_module.PianoRollScriptRuntimeEvidence(
-            request_id="5" * 32,
-            operation="write_notes",
-            mode="replace",
-            requested_note_digest=digest,
-            expected_added_note_count=1,
-            ppq=96,
-            before_note_count=None,
-            score_note_count=1,
-            added_note_digest_sha256=creative_module._runtime_note_digest(
-                notes, ppq=96
-            ),
-            score_digest_sha256="6" * 64,
-            script_completed=True,
-            postcondition_verified=True,
-            receipt_path="/tmp/synthetic-piano-roll-receipt.json",
-            receipt_sha256="7" * 64,
-            persistence_check_completed=False,
-            persistence_check_verified=False,
-        )
-        persistence = creative_module._PianoRollPersistenceReceipt(
-            request_id=evidence.request_id,
-            operation="verify_write_notes",
-            ppq=96,
-            expected_score_note_count=1,
-            observed_score_note_count=1,
-            expected_score_digest_sha256="6" * 64,
-            observed_score_digest_sha256="6" * 64,
-            persistence_check_completed=True,
-            persistence_check_verified=True,
-            receipt_path="/tmp/synthetic-piano-roll-persistence.json",
-            receipt_sha256="8" * 64,
-        )
-        trigger = HotkeyDispatch(
-            platform="macos",
-            shortcut="Cmd+Opt+Y",
-            fl_window_found=True,
-            fl_window_focused=True,
-            hotkey_dispatched=True,
-        )
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"POSTFADER_PIANO_ROLL_SCRIPTS_DIR": directory},
-            clear=False,
-        ):
-            with (
-                mock.patch.object(PIANO_ROLL, "require_armed"),
-                mock.patch.object(
-                    creative_module,
-                    "_target_piano_roll",
-                    return_value=target_receipt(),
-                ),
-                mock.patch.object(
-                    creative_module,
-                    "_trigger_piano_roll_shortcut",
-                    return_value=trigger,
-                ),
-                mock.patch.object(
-                    creative_module,
-                    "_await_piano_roll_receipt",
-                    return_value=(evidence, None),
-                ),
-                mock.patch.object(
-                    creative_module,
-                    "_await_persistence_receipt",
-                    return_value=(persistence, None),
-                ),
-                mock.patch.object(
-                    creative_module.os,
-                    "urandom",
-                    side_effect=[b"\x55" * 16, b"\x22" * 32],
-                ),
-            ):
-                receipt = write_piano_roll_notes(
-                    notes,
-                    channel_index=2,
-                    pattern_number=3,
-                    mode="replace",
-                    auto_trigger=True,
-                )
-
-        self.assertEqual(receipt.status, "script_runtime_verified")
-        self.assertTrue(receipt.application_verified)
-        assert receipt.script_runtime_evidence is not None
-        self.assertTrue(
-            receipt.script_runtime_evidence.persistence_check_verified
-        )
-        self.assertFalse(receipt.authoritative_note_readback_available)
-
     def test_piano_roll_script_runtime_receipt_rejects_tampering(self) -> None:
         notes = [CreativeNote(pitch=60, start_beats=0, duration_beats=1)]
         request_id = "3" * 32
@@ -885,195 +682,77 @@ class CreativeTests(unittest.TestCase):
         self.assertIsNone(evidence)
         self.assertIn("payload fields", error)
 
-    def _assert_piano_roll_live_sequence_is_serial(self, operation: str) -> None:
-        events: list[tuple[str, str]] = []
-        event_lock = threading.Lock()
-        local = threading.local()
-        active_steps = 0
-        overlapped = False
+    def test_piano_roll_scripting_refuses_before_any_bridge_call_or_file_write(self) -> None:
+        """Tested feature: every Piano Roll path this fork removed refuses before it reaches FL or writes a script.
+        Check: note writes, transforms, setup, targeting, script writing and the shortcut each raise FeatureRemovedError, no bridge command is sent, the scripts folder stays empty, and status reports the removal without reading that folder.
+        Mocks: the bridge client, replaced with a recording client; the scripts folder, pointed at a temporary directory.
+        Test would be deprecated if: this fork restores Piano Roll scripting.
+        """
+        class RecordingClient(DirectFakeClient):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
 
-        def step(name: str) -> None:
-            nonlocal active_steps, overlapped
-            owner = local.owner
-            with event_lock:
-                overlapped = overlapped or active_steps > 0
-                active_steps += 1
-                events.append((owner, name))
-            try:
-                # Give a competing request a deterministic opportunity to
-                # enter each side-effect boundary when serialization is absent.
-                time.sleep(0.01)
-            finally:
-                with event_lock:
-                    active_steps -= 1
+            def call(self, command: str, **arguments):
+                self.calls.append(command)
+                return super().call(command, **arguments)
 
-        def target(_channel_index: int, _pattern_number: int) -> PianoRollTargetReceipt:
-            step("target")
-            return target_receipt()
-
-        def atomic(_path: Path, _content: str) -> str:
-            step("script")
-            return "b" * 64
-
-        def record(**kwargs) -> None:
-            step("record")
-            original_record(**kwargs)
-
-        def trigger() -> HotkeyDispatch:
-            step("hotkey")
-            return HotkeyDispatch(
-                platform="macos",
-                shortcut="Cmd+Opt+Y",
-                fl_window_found=True,
-                fl_window_focused=True,
-                hotkey_dispatched=True,
-            )
-
-        original_record = PIANO_ROLL.record
-        with PIANO_ROLL._lock:
-            PIANO_ROLL._armed = True
-
-        def invoke(owner: str, directory: str):
-            local.owner = owner
-            if operation == "notes":
-                return write_piano_roll_notes(
-                    [CreativeNote(pitch=60 if owner == "a" else 67, start_beats=0.0, duration_beats=1.0)],
-                    channel_index=2,
-                    pattern_number=3,
-                    auto_trigger=True,
-                )
-            return transform_piano_roll(
-                PianoRollTransform(
-                    operation="humanize",
-                    scope="selected",
-                    timing_beats=0.03,
-                    velocity_amount=0.08,
-                    seed=91,
-                ),
-                channel_index=2,
-                pattern_number=3,
-                auto_trigger=True,
-            )
-
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"POSTFADER_PIANO_ROLL_SCRIPTS_DIR": directory},
-            clear=False,
+        client = RecordingClient()
+        notes = [CreativeNote(pitch=60, start_beats=0.0, duration_beats=1.0)]
+        with (
+            tempfile.TemporaryDirectory(prefix="postfader-removed-pr-") as scripts,
+            mock.patch.dict(
+                os.environ, {creative_module.PIANO_ROLL_SCRIPTS_DIR_ENV: scripts}
+            ),
+            mock.patch("fl_studio_mcp.creative.get_client", return_value=client),
         ):
-            with (
-                mock.patch("fl_studio_mcp.creative._target_piano_roll", side_effect=target),
-                mock.patch("fl_studio_mcp.creative._atomic_text", side_effect=atomic),
-                mock.patch.object(PIANO_ROLL, "record", side_effect=record),
-                mock.patch("fl_studio_mcp.creative._trigger_piano_roll_shortcut", side_effect=trigger),
+            with PIANO_ROLL._lock:
+                armed_before = PIANO_ROLL._armed
+                PIANO_ROLL._armed = True
+
+            def restore_armed() -> None:
+                with PIANO_ROLL._lock:
+                    PIANO_ROLL._armed = armed_before
+
+            self.addCleanup(restore_armed)
+            refusals = {
+                "write notes": lambda: write_piano_roll_notes(
+                    notes, channel_index=0, pattern_number=1
+                ),
+                "write notes without trigger": lambda: write_piano_roll_notes(
+                    notes, channel_index=0, pattern_number=1, auto_trigger=False
+                ),
+                "transform": lambda: transform_piano_roll(
+                    PianoRollTransform(operation="transpose", semitones=12),
+                    channel_index=0,
+                    pattern_number=1,
+                ),
+                "prepare": lambda: PIANO_ROLL.bridge_action("prepare"),
+                "confirm": lambda: PIANO_ROLL.bridge_action(
+                    "confirm", confirm_user_ran_script=True
+                ),
+                "script write": lambda: creative_module._atomic_text(
+                    Path(scripts) / creative_module.PIANO_ROLL_SCRIPT_NAME, "x"
+                ),
+                "shortcut": creative_module._trigger_piano_roll_shortcut,
+                "target": lambda: creative_module._target_piano_roll(0, 1),
+            }
+            for label, invoke in refusals.items():
+                with self.subTest(path=label):
+                    with self.assertRaises(FeatureRemovedError) as refused:
+                        invoke()
+                    self.assertEqual(str(refused.exception), PIANO_ROLL_REMOVED)
+            self.assertEqual(client.calls, [])
+            self.assertEqual(os.listdir(scripts), [])
+            with mock.patch(
+                "fl_studio_mcp.creative.piano_roll_scripts_directory",
+                side_effect=AssertionError("status must not read the scripts folder"),
             ):
-                barrier = threading.Barrier(2)
-
-                def run(owner: str):
-                    local.owner = owner
-                    barrier.wait(timeout=5)
-                    return invoke(owner, directory)
-
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    futures = [pool.submit(run, owner) for owner in ("a", "b")]
-                    receipts = [future.result(timeout=10) for future in futures]
-
-        self.assertEqual(len(receipts), 2)
-        self.assertFalse(overlapped, events)
-        self.assertEqual(active_steps, 0)
-        by_owner = {
-            owner: [name for event_owner, name in events if event_owner == owner]
-            for owner in ("a", "b")
-        }
-        self.assertEqual(by_owner["a"], ["target", "script", "record", "hotkey"])
-        self.assertEqual(by_owner["b"], ["target", "script", "record", "hotkey"])
-
-    def test_piano_roll_note_target_script_record_hotkey_is_serial(self) -> None:
-        self._assert_piano_roll_live_sequence_is_serial("notes")
-
-    def test_piano_roll_transform_target_script_record_hotkey_is_serial(self) -> None:
-        self._assert_piano_roll_live_sequence_is_serial("transform")
-
-    def test_piano_roll_prepare_cannot_replace_an_in_flight_dispatch(self) -> None:
-        trigger_entered = threading.Event()
-        release_trigger = threading.Event()
-        prepare_started = threading.Event()
-        bootstrap_written = threading.Event()
-        errors = []
-
-        with PIANO_ROLL._lock:
-            PIANO_ROLL._prepared = True
-            PIANO_ROLL._armed = True
-
-        def atomic(_path: Path, content: str) -> str:
-            if "POSTFADER_BOOTSTRAP = True" in content:
-                bootstrap_written.set()
-            return "c" * 64
-
-        def trigger() -> HotkeyDispatch:
-            trigger_entered.set()
-            release_trigger.wait(timeout=2)
-            return HotkeyDispatch(
-                platform="macos",
-                shortcut="Cmd+Opt+Y",
-                fl_window_found=True,
-                fl_window_focused=True,
-                hotkey_dispatched=True,
-            )
-
-        def dispatch() -> None:
-            try:
-                write_piano_roll_notes(
-                    [CreativeNote(pitch=60, start_beats=0.0, duration_beats=1.0)],
-                    channel_index=2,
-                    pattern_number=3,
-                    auto_trigger=True,
-                )
-            except BaseException as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        def prepare() -> None:
-            prepare_started.set()
-            try:
-                PIANO_ROLL.bridge_action("prepare")
-            except BaseException as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"POSTFADER_PIANO_ROLL_SCRIPTS_DIR": directory},
-            clear=False,
-        ):
-            with (
-                mock.patch(
-                    "fl_studio_mcp.creative._target_piano_roll",
-                    return_value=target_receipt(),
-                ),
-                mock.patch(
-                    "fl_studio_mcp.creative._atomic_text",
-                    side_effect=atomic,
-                ),
-                mock.patch(
-                    "fl_studio_mcp.creative._trigger_piano_roll_shortcut",
-                    side_effect=trigger,
-                ),
-            ):
-                dispatch_thread = threading.Thread(target=dispatch)
-                dispatch_thread.start()
-                self.assertTrue(trigger_entered.wait(timeout=2))
-
-                prepare_thread = threading.Thread(target=prepare)
-                prepare_thread.start()
-                self.assertTrue(prepare_started.wait(timeout=2))
-                self.assertFalse(bootstrap_written.wait(timeout=0.1))
-
-                release_trigger.set()
-                dispatch_thread.join(timeout=2)
-                prepare_thread.join(timeout=2)
-
-        self.assertFalse(dispatch_thread.is_alive())
-        self.assertFalse(prepare_thread.is_alive())
-        self.assertEqual(errors, [])
-        self.assertTrue(bootstrap_written.is_set())
+                status = PIANO_ROLL.status()
+        self.assertTrue(status.removed)
+        self.assertFalse(status.armed_this_session)
+        self.assertFalse(status.script_exists)
+        self.assertFalse(status.automatic_trigger_supported)
+        self.assertEqual(status.setup_instruction, PIANO_ROLL_REMOVED)
 
     def test_pattern_creation_uses_protocol_instead_of_build_hash(self) -> None:
         client = DirectFakeClient()
@@ -1122,6 +801,11 @@ class CreativeTests(unittest.TestCase):
             self.assertAlmostEqual(_state.CHANNELS[1].pan, 0.5, places=3)
 
     def test_creative_workflows_reject_a_stale_session_before_mutation(self) -> None:
+        """Tested feature: pattern, marker and automation workflows refuse a stale FL session before changing anything.
+        Check: each workflow given a stale session fingerprint raises the session precondition error, no bridge command is sent, and the fake project is unchanged.
+        Mocks: the bridge client, replaced with a recording client over the fake FL modules.
+        Test would be deprecated if: these workflows stop taking a session fingerprint.
+        """
         class RecordingClient(DirectFakeClient):
             def __init__(self) -> None:
                 self.calls: list[str] = []
@@ -1155,30 +839,6 @@ class CreativeTests(unittest.TestCase):
                     target_index=1,
                     property="pan",
                     value_normalized=0.75,
-                    session_fingerprint=stale,
-                )
-
-            with PIANO_ROLL._lock:
-                PIANO_ROLL._armed = True
-            with self.assertRaisesRegex(
-                VerifiedWritesUnavailable, "session precondition failed"
-            ):
-                write_piano_roll_notes(
-                    [CreativeNote(pitch=60, start_beats=0.0, duration_beats=1.0)],
-                    channel_index=2,
-                    pattern_number=3,
-                    session_fingerprint=stale,
-                )
-            with self.assertRaisesRegex(
-                VerifiedWritesUnavailable, "session precondition failed"
-            ):
-                transform_piano_roll(
-                    PianoRollTransform(
-                        operation="transpose",
-                        semitones=12,
-                    ),
-                    channel_index=2,
-                    pattern_number=3,
                     session_fingerprint=stale,
                 )
 

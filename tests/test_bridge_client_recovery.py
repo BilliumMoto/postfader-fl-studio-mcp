@@ -65,7 +65,7 @@ def ok_result(**result):
 
 
 def client_with(*transports):
-    client = BridgeClient(port=1, mailbox="/nonexistent", midi_port="none")
+    client = BridgeClient(midi_port="none")
     client._transports = list(transports)
     client._active = None
     return client
@@ -188,7 +188,7 @@ class BridgeClientRecoveryTests(unittest.TestCase):
             ) as probe,
         ):
             with self.assertRaises(BridgeError) as refused:
-                BridgeClient(port=1, mailbox="/nonexistent", midi_port=None)
+                BridgeClient(midi_port=None)
         self.assertIn("FL_BRIDGE_MIDI_PORT", str(refused.exception))
         probe.assert_not_called()
 
@@ -196,8 +196,6 @@ class BridgeClientRecoveryTests(unittest.TestCase):
         configured = "Configured Loopback With Spaces"
         with mock.patch.object(bridge_client, "MIDI_ENABLED", True):
             client = BridgeClient(
-                port=1,
-                mailbox="/nonexistent",
                 midi_port=configured,
             )
         self.assertEqual(client.midi_port, configured)
@@ -939,6 +937,89 @@ class BridgeClientRecoveryTests(unittest.TestCase):
             client.call("ping")
 
         self.assertIn("owner pid 42", str(raised.exception))
+
+
+class MidiOnlyClientTests(unittest.TestCase):
+    """Mocks: the TCP and file transport classes, replaced with stand-ins that fail if constructed."""
+
+    def setUp(self):
+        refuse = AssertionError("this fork never builds the TCP or file transport")
+        patches = (
+            mock.patch.object(bridge_client, "_TcpTransport", side_effect=refuse),
+            mock.patch.object(bridge_client, "_FileTransport", side_effect=refuse),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_enabled_midi_builds_only_the_midi_transport(self):
+        """Tested feature: with MIDI enabled, the client reaches FL only over MIDI SysEx.
+        Check: the client's transport list is exactly one MIDI transport for the configured port.
+        Test would be deprecated if: the fork restores another transport.
+        """
+        with mock.patch.object(bridge_client, "MIDI_ENABLED", True):
+            client = BridgeClient(midi_port="Configured Loopback")
+        self.assertEqual(len(client._transports), 1)
+        self.assertIsInstance(client._transports[0], _MidiTransport)
+        self.assertEqual(client._transports[0].port_name, "Configured Loopback")
+
+    def test_disabled_midi_leaves_no_transport_and_names_the_midi_settings(self):
+        """Tested feature: without MIDI the client has no way to reach FL and says which settings it needs.
+        Check: the client has no transports, and a call raises the not-connected error naming FL_BRIDGE_ENABLE_MIDI=1 and FL_BRIDGE_MIDI_PORT, not TCP or a mailbox.
+        Test would be deprecated if: the fork restores another transport.
+        """
+        with mock.patch.object(bridge_client, "MIDI_ENABLED", False):
+            client = BridgeClient(midi_port="Configured Loopback")
+            self.assertEqual(client._transports, [])
+            with self.assertRaises(bridge_client.BridgeUnavailableError) as refused:
+                client.call("ping")
+        message = str(refused.exception)
+        self.assertIn("FL_BRIDGE_ENABLE_MIDI=1", message)
+        self.assertIn("FL_BRIDGE_MIDI_PORT", message)
+        self.assertNotIn("TCP", message)
+        self.assertNotIn("mailbox", message)
+
+    def test_removed_transport_settings_refuse_until_unset(self):
+        """Tested feature: the client refuses to start while a TCP or file mailbox setting is set, instead of ignoring it.
+        Check: with each of FL_BRIDGE_HOST, FL_BRIDGE_PORT and FL_BRIDGE_MAILBOX set, construction raises naming it and saying to unset it and restart the MCP server; after unsetting, construction succeeds.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        for name in bridge_client.REMOVED_TRANSPORT_SETTINGS:
+            with self.subTest(setting=name):
+                with mock.patch.dict(os.environ, {name: "unused"}):
+                    with self.assertRaises(
+                        bridge_client.RemovedTransportSettingsError
+                    ) as refused:
+                        BridgeClient(midi_port="Configured Loopback")
+                    self.assertIsInstance(refused.exception, BridgeError)
+                    self.assertIn(name, str(refused.exception))
+                    self.assertIn(
+                        "Unset it and restart the MCP server", str(refused.exception)
+                    )
+                    os.environ.pop(name)
+                    with mock.patch.object(bridge_client, "MIDI_ENABLED", False):
+                        client = BridgeClient(midi_port="Configured Loopback")
+                    self.assertEqual(client._transports, [])
+
+    def test_midi_probe_child_opens_no_console_window(self):
+        """Tested feature: the MIDI port probe's child Python opens no console window on Windows.
+        Check: the probe passes CREATE_NO_WINDOW on Windows, or 0 elsewhere, as the child's creation flags.
+        Mocks: subprocess.run, so no child is started, plus the TCP and file transport stand-ins.
+        Test would be deprecated if: the probe stops running in a child process.
+        """
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        with (
+            mock.patch.dict(os.environ, {"FL_BRIDGE_SANDBOXED": "0"}),
+            mock.patch.object(bridge_client, "MIDI_ENABLED", True),
+            mock.patch.dict(bridge_client._MIDI_PREFLIGHT, clear=True),
+            mock.patch.object(bridge_client.subprocess, "run", return_value=failed) as run,
+        ):
+            self.assertFalse(bridge_client._midi_preflight("Configured Loopback"))
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
 
 if __name__ == "__main__":

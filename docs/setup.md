@@ -1,5 +1,7 @@
 # Setup and usage
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 PostFader's guided `postfader setup` command connects the package, bridge,
 existing virtual MIDI endpoint, generated client configuration, and doctor in
 one resumable flow. PostFader does not install or configure virtual MIDI
@@ -140,28 +142,11 @@ both input and output inventories. It never guesses among partial or ambiguous
 matches. The runtime matcher also fails bounded and deterministic before any
 ownership lock or endpoint open.
 
-### Optional Piano Roll scripting bridge
+### Piano Roll scripting (removed in this fork)
 
-Piano Roll notes live in FL Studio's separate `.pyscript` runtime, not its MIDI
-controller API. The creative tools therefore use one generated **Postfader
-Apply** script under:
-
-```text
-<FL Studio user-data>/Settings/Piano roll scripts/Postfader/
-```
-
-The directory follows the same Windows Known Documents and
-`FL_STUDIO_USER_DATA_DIR` resolution as the controller-script installer. An
-absolute `POSTFADER_PIANO_ROLL_SCRIPTS_DIR` can override only this generated
-script location.
-
-For each new MCP process, call `piano_roll_setup(action="prepare")`, open any
-Piano Roll, and run **Scripts → Postfader → Postfader Apply** once. Then call
-`piano_roll_setup(action="confirm", confirm_user_ran_script=true)`. Automatic
-writes can then target the requested channel and pattern and dispatch FL's
-run-last-script shortcut. They report focus and key dispatch, never fabricated
-note readback; inspect the Piano Roll before issuing another mutation. Set
-`auto_trigger=false` to generate the script for manual execution instead.
+This fork of PostFader removed Piano Roll scripting. It writes no Postfader
+Apply script, never sends FL Studio the Piano Roll run-script shortcut, and has
+no tool that reads or writes Piano Roll notes. See [FORK.md](../FORK.md).
 
 ### Armed-ready creation fixtures
 
@@ -515,11 +500,6 @@ project.
 These tools work outside FL Studio's MIDI scripting API. Upgrade the server
 and bridge together before using them.
 
-- **Read existing notes:** prepare and arm the Piano Roll script once per MCP
-  process, then call `piano_roll_read_notes` with the channel, pattern, offset,
-  and limit. It selects the target and opens the editor; it does not alter note
-  content. Each page is a fresh observation. A missing or stale target receipt
-  returns no attributed notes.
 - **Load a plug-in on macOS:** grant macOS Accessibility access to the launching
   host when using the native-menu adapter. `plugin_list_available` reads the
   current English Add-menu favorites; `plugin_load` adds one exact named
@@ -552,11 +532,8 @@ acceptance remains pending. See the [contracts](tool-contracts.md) and
 | `FL_BRIDGE_ENABLE_WRITES` | Legacy FL-process startup opt-in. Ordinary clients use the session-only `session_set_write_mode` tool instead. |
 | `FL_BRIDGE_SANDBOXED` | `1` forbids native MIDI enumeration/open and live handshake. |
 | `FL_BRIDGE_TIMEOUT` | Bridge response timeout in seconds. |
-| `FL_BRIDGE_HOST`, `FL_BRIDGE_PORT` | Test-only loopback TCP transport. |
-| `FL_BRIDGE_MAILBOX` | Test-only file-mailbox transport directory. |
 | `POSTFADER_PRODUCTION_RUN_PATH` | Optional local SQLite journal path; defaults to `Settings/PostFader/production-runs-v1.sqlite3` under FL user data. |
 | `POSTFADER_FL_STUDIO_PATH` | Optional absolute FL `.app` bundle (macOS) or `.exe` (Windows) for saved-project rendering. |
-| `POSTFADER_PIANO_ROLL_SCRIPTS_DIR` | Optional absolute override for the generated Piano Roll script directory. Otherwise it follows `FL_STUDIO_USER_DATA_DIR`. |
 | `POSTFADER_CREATION_REVIEW_PATH` | Optional absolute override for the schema-versioned Creation Review session store. Persistence is opt-in. |
 
 ## 8. Hermetic tests

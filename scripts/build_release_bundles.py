@@ -40,7 +40,6 @@ WORKTREE_FEATURE_PATHS = (
     Path("docs/releases/dev-v10.md"),
     Path("docs/sound-selection.md"),
     Path("fl_studio_mcp/file_fingerprints.py"),
-    Path("fl_studio_mcp/piano_roll.py"),
     Path("fl_studio_mcp/production_run_persistence.py"),
     Path("fl_studio_mcp/saved_project_render.py"),
     Path("fl_studio_mcp/plugin_loading.py"),

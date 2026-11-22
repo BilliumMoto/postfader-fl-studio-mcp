@@ -18,6 +18,8 @@ from fl_studio_mcp.creation_review.mcp import (
 )
 from fl_studio_mcp.creation_review.models import (
     AcceptedElementLock,
+    ChangeDrumKitOperation,
+    TransformGeneratedSequenceOperation,
     CreatePlaylistHandoffDeltaOperation,
     CreationEvaluationReport,
     CreationFeedback,
@@ -39,7 +41,12 @@ from fl_studio_mcp.creation_review.persistence import (
     ReviewSessionWriteError,
 )
 from fl_studio_mcp.creation_review.revision_executor import RevisionExecutor
-from fl_studio_mcp.creation_review.revision_planner import revision_request_digest
+from fl_studio_mcp.creation_review.revision_planner import (
+    REMOVED_REVISION_OPERATION_MESSAGES,
+    revision_request_digest,
+    validate_revision_plan,
+)
+from fl_studio_mcp.fork_removals import FeatureRemovedError
 from fl_studio_mcp.creation_review.sessions import (
     ReviewSessionError,
     ReviewSessionRegistry,
@@ -514,6 +521,96 @@ class CreationReviewMCPTests(unittest.TestCase):
             executor.assert_called_once()
             self.assertTrue(executor.call_args.kwargs["current_authorization"])
             self.assertEqual(result.revision_pass_id, "pass-later-authorization")
+
+    def test_revisions_needing_removed_features_are_refused_without_spending_a_pass(self) -> None:
+        """Tested feature: a revision that would rewrite notes or change a drum kit is refused at planning and at apply without recording anything, so kept revisions still apply.
+        Check: planning a drum-kit change raises FeatureRemovedError and records no plan; validation reports the removal; applying a recorded note-rewrite plan raises before the executor and records no pass or state change; a feedback-lock revision then applies.
+        Mocks: the Review Session registry, a fresh in-memory one, and the revision executor, which must not be reached for the refused plan.
+        Test would be deprecated if: this fork restores Piano Roll note writes and preset selection.
+        """
+        registry = self._registry()
+        with patch.object(review_api, "REVIEW_SESSIONS", registry):
+            self._evaluated_session(
+                registry,
+                review_session_id="review-removed",
+                interaction_policy="analyze_and_plan",
+                authorized_to_modify=True,
+            )
+            request = self._apply_request(
+                review_session_id="review-removed", authorized_to_modify=True
+            )
+            drum_kit = ChangeDrumKitOperation(
+                operation_id="kit", finding_ids=("finding-1",)
+            )
+            with self.assertRaises(FeatureRemovedError) as planned:
+                review_api.review_plan_revision(
+                    review_api.ReviewPlanRevisionRequest(
+                        review_session_id="review-removed",
+                        request=request.request,
+                        operations=(drum_kit,),
+                        revision_plan_id="revision-kit",
+                    )
+                )
+            self.assertIn("change_drum_kit", str(planned.exception))
+            self.assertEqual(registry.get("review-removed").revision_plans, ())
+
+            rewrite_plan = RevisionPlan(
+                revision_plan_id="revision-1",
+                review_session_id="review-removed",
+                source_evaluation_id="evaluation-1",
+                source_run_id="run-1",
+                revision_request_digest=revision_request_digest(request.request),
+                operations=(
+                    TransformGeneratedSequenceOperation(
+                        operation_id="rewrite", finding_ids=("finding-1",)
+                    ),
+                ),
+            )
+            validation = validate_revision_plan(rewrite_plan, request=request.request)
+            self.assertFalse(validation.valid)
+            self.assertIn(
+                REMOVED_REVISION_OPERATION_MESSAGES["transform_generated_sequence"],
+                " ".join(validation.blockers),
+            )
+
+            # A plan recorded earlier, for example by an upstream build.
+            registry.add_revision_plan("review-removed", rewrite_plan)
+            status_before = registry.get("review-removed").status
+            with patch.object(
+                RevisionExecutor,
+                "apply",
+                side_effect=AssertionError("revision executor reached"),
+            ):
+                with self.assertRaises(FeatureRemovedError):
+                    review_api.review_apply_revision(request)
+            after_refusal = registry.get("review-removed")
+            self.assertEqual(after_refusal.revision_passes, ())
+            self.assertEqual(after_refusal.status, status_before)
+
+            kept_plan = RevisionPlan(
+                revision_plan_id="revision-2",
+                review_session_id="review-removed",
+                source_evaluation_id="evaluation-1",
+                source_run_id="run-1",
+                revision_request_digest=revision_request_digest(request.request),
+                operations=(RecordFeedbackLockOperation(operation_id="lock-record"),),
+            )
+            registry.add_revision_plan("review-removed", kept_plan)
+            kept_pass = RevisionPass(
+                revision_pass_id="pass-kept",
+                review_session_id="review-removed",
+                source_evaluation_id="evaluation-1",
+                revision_plan_id="revision-2",
+                source_run_id="run-1",
+                status="awaiting_rebounce",
+            )
+            with patch.object(RevisionExecutor, "apply", return_value=kept_pass) as executor:
+                result = review_api.review_apply_revision(
+                    request.model_copy(update={"revision_plan_id": "revision-2"})
+                )
+            executor.assert_called_once()
+            self.assertEqual(result.revision_pass_id, "pass-kept")
+            self.assertEqual(len(registry.get("review-removed").revision_passes), 1)
 
     def test_overlapping_apply_does_not_dispatch_the_same_revision_twice(self) -> None:
         registry = self._registry()

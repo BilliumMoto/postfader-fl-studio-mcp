@@ -46,7 +46,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--python", default=os.fspath(default_interpreter()))
     parser.add_argument("--user-data-dir")
     parser.add_argument(
-        "--transport", choices=("automatic", "midi"), default="automatic"
+        "--transport", choices=("automatic", "midi"), default="midi",
+        help="midi (the default) is the only transport this build supports; "
+        "automatic is refused.",
     )
     parser.add_argument("--midi-port")
     parser.add_argument("--server-name", default="fl-studio")

@@ -1,5 +1,7 @@
 # Releasing PostFader
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](FORK.md).
+
 This is the maintainer checklist for a PostFader release. Keep release work
 small, reviewable, and reproducible. The release workflow is the final gate:
 it validates the public tree, runs the hermetic suite on Windows and macOS,

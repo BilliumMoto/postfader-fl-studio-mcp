@@ -79,7 +79,7 @@ GROUPS = (
     ),
     (
         "Sound Selection",
-        "Choose and apply presets from the instruments already loaded.",
+        "Plan sound palettes from the instruments already loaded. This build cannot select presets.",
         ("sound_",),
     ),
     (
@@ -91,11 +91,6 @@ GROUPS = (
         "Composition and MIDI",
         "Generate chords, melodies, basslines, and drums; export MIDI files.",
         ("compose_",),
-    ),
-    (
-        "Piano Roll",
-        "Read, write, and transform notes through FL's Piano Roll scripting.",
-        ("piano_roll_",),
     ),
     (
         "Production Runs",

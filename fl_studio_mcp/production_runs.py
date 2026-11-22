@@ -18,7 +18,8 @@ import secrets
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal, TypeAlias, cast, get_args
+from types import MappingProxyType
+from typing import Annotated, Any, Literal, Mapping, TypeAlias, cast, get_args
 
 from pydantic import ConfigDict, Field, StrictBool, model_validator
 
@@ -124,6 +125,12 @@ from .creative import (
     record_automation_value,
     transform_piano_roll,
     write_piano_roll_notes,
+)
+from .fork_removals import (
+    APPLICABLE_SELECTION_ACTIONS,
+    PIANO_ROLL_REMOVED,
+    PRESET_SELECTION_REMOVED,
+    FeatureRemovedError,
 )
 from .performance import TrackBController, TrackBInspector
 from .plugin_atlas import load_bundled_registry
@@ -668,7 +675,7 @@ class PlanSoundPaletteOperation(ProductionOperationBase):
 
 
 class ApplySoundPaletteOperation(ProductionOperationBase):
-    """Select a palette's presets in FL Studio and read each one back."""
+    """Apply a palette's roles in FL Studio and read each one back; this fork refuses roles that select a preset."""
 
     operation: Literal["apply_sound_palette"] = "apply_sound_palette"
     palette: SoundPalettePlan | SoundPaletteVariationPlan | OperationOutputReference
@@ -1630,6 +1637,52 @@ _UNAVAILABLE_OPERATION_MESSAGES: dict[str, str] = {
     ),
 }
 
+# A read-only public view of _UNAVAILABLE_OPERATION_MESSAGES, which the
+# operation catalog in tool_schemas.py reports alongside the removed features.
+UNAVAILABLE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType(
+    _UNAVAILABLE_OPERATION_MESSAGES
+)
+
+# Operations whose only implementation writes Piano Roll notes or selects a
+# plug-in preset. This fork removed both features, so a plan containing any of
+# them fails structural validation before anything is written, and dispatch
+# refuses them as a backstop. apply_creation_revision is listed because a
+# revision may produce note writes or preset or drum-kit selections.
+# apply_sound_palette is not listed: structural validation refuses an inline
+# palette whose applied roles would select a preset, and the runtime preflight
+# refuses one produced by an earlier step of the run when the run reaches it,
+# before write mode is enabled or anything is dispatched for it; earlier
+# operations in the run may already have applied by then.
+REMOVED_FEATURE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType({
+    "write_note_sequence": (
+        "This run is blocked because write_note_sequence writes notes through "
+        "FL's Piano Roll. " + PIANO_ROLL_REMOVED
+    ),
+    "transform_piano_roll": (
+        "This run is blocked because transform_piano_roll changes notes "
+        "through FL's Piano Roll. " + PIANO_ROLL_REMOVED
+    ),
+    # The alternative this message names, review_apply_revision, stands in for
+    # a recovery step. No new test follows it: the existing
+    # review_apply_revision tests in tests/test_creation_review_mcp.py, which
+    # apply revisions through it, serve as that test.
+    "apply_creation_revision": (
+        "This run is blocked because a creation revision may produce Piano "
+        "Roll note writes or preset or drum-kit selections, which this fork "
+        "of PostFader removed, so it refuses apply_creation_revision inside a "
+        "Production Run. review_apply_revision applies revisions that contain "
+        "none of them."
+    ),
+    "select_plugin_preset": (
+        "This run is blocked because select_plugin_preset selects a plug-in "
+        "preset. " + PRESET_SELECTION_REMOVED
+    ),
+    "select_drum_kit": (
+        "This run is blocked because select_drum_kit selects a drum kit "
+        "preset. " + PRESET_SELECTION_REMOVED
+    ),
+})
+
 
 def _generate_sequence(
     operation: GenerateChordProgressionOperation
@@ -2450,6 +2503,20 @@ def _structural_validation(
                 operation_id=operation_id,
             )
         )
+    for operation in operations:
+        removed_message = REMOVED_FEATURE_OPERATION_MESSAGES.get(
+            operation.operation
+        )
+        if removed_message is not None:
+            blockers.append(
+                _blocker(
+                    "unsupported_by_postfader",
+                    "operation_removed_in_fork",
+                    removed_message,
+                    operation_id=operation.operation_id,
+                    evidence=(f"operation={operation.operation}",),
+                )
+            )
 
     def estimated_palette_roles(
         operation: ApplySoundPaletteOperation,
@@ -2686,6 +2753,32 @@ def _structural_validation(
         if isinstance(operation, ApplySoundPaletteOperation) and isinstance(
             operation.palette, (SoundPalettePlan, SoundPaletteVariationPlan)
         ):
+            # This fork removed preset selection. Refuse an inline palette here,
+            # before anything in the run is written, if any role it would apply
+            # has an action this fork cannot apply (it can only keep the current
+            # preset or reroll Loop Starter). A palette produced by an earlier
+            # step is only known when the run reaches this operation, where the
+            # runtime preflight refuses it.
+            applied_role_keys = {item.casefold() for item in operation.role_ids}
+            preset_roles = tuple(
+                item.role_id
+                for item in operation.palette.assignments
+                if item.selection_action not in APPLICABLE_SELECTION_ACTIONS
+                and (not applied_role_keys or item.role_id.casefold() in applied_role_keys)
+            )
+            if preset_roles:
+                blockers.append(
+                    _blocker(
+                        "unsupported_by_postfader",
+                        "palette_preset_selection_removed",
+                        f"Operation {operation.operation_id!r} would select a preset for role(s) "
+                        + ", ".join(repr(item) for item in preset_roles[:16])
+                        + ". "
+                        + PRESET_SELECTION_REMOVED,
+                        operation_id=operation.operation_id,
+                        evidence=tuple(f"role={item}" for item in preset_roles[:16]),
+                    )
+                )
             if operation.palette.blockers:
                 blockers.append(
                     _blocker(
@@ -3172,8 +3265,7 @@ def _live_validation(
                     _blocker(
                         "setup_or_session",
                         "piano_roll_bridge_not_armed",
-                        "Piano Roll writing needs one setup step: prepare the Postfader Apply script, run it once from an FL Piano Roll, then confirm it for this MCP process.",
-                        evidence=(piano.setup_instruction,),
+                        "Piano Roll writing is unavailable. " + PIANO_ROLL_REMOVED,
                     )
                 )
 
@@ -4366,6 +4458,10 @@ def _dispatch_operation(
 ) -> ProductionResultPayload:
     """Adapt one production operation to an existing PostFader implementation."""
 
+    removed_message = REMOVED_FEATURE_OPERATION_MESSAGES.get(operation.operation)
+    if removed_message is not None:
+        # Validation already refuses these; never reach a removed feature.
+        raise FeatureRemovedError(removed_message)
     if isinstance(operation, StartReviewSessionOperation):
         from .creation_review.mcp import review_start
 
@@ -5066,6 +5162,27 @@ def _runtime_preflight_blocker(
                 )
                 if denied is not None:
                     return denied
+            # This fork removed preset selection. A palette produced by an
+            # earlier step is known only now, so refuse it here, before the run
+            # enables write mode or dispatches this operation, if any role it
+            # would apply has an action this fork cannot apply.
+            preset_roles = tuple(
+                item.role_id
+                for item in palette.assignments
+                if item.selection_action not in APPLICABLE_SELECTION_ACTIONS
+                and (not selected_roles or item.role_id.casefold() in selected_roles)
+            )
+            if preset_roles:
+                return _blocker(
+                    "unsupported_by_postfader",
+                    "palette_preset_selection_removed",
+                    f"Operation {operation.operation_id!r} would select a preset for role(s) "
+                    + ", ".join(repr(item) for item in preset_roles[:16])
+                    + ". "
+                    + PRESET_SELECTION_REMOVED,
+                    operation_id=operation.operation_id,
+                    evidence=tuple(f"role={item}" for item in preset_roles[:16]),
+                )
             return None
         if isinstance(operation, WriteNoteSequenceOperation) and isinstance(
             operation.channel_index, OperationOutputReference
@@ -5878,7 +5995,7 @@ class ProductionRunRegistry:
                 return _blocker(
                     "setup_or_session",
                     "piano_roll_context_unavailable",
-                    "Piano Roll writing needs one setup action: run Postfader Apply once in an FL Piano Roll, then continue this run.",
+                    "Piano Roll writing is unavailable. " + PIANO_ROLL_REMOVED,
                 )
         return None
 

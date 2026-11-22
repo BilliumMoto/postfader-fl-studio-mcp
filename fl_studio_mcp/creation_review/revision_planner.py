@@ -11,8 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from types import MappingProxyType
+from typing import Any, get_args
 
+from ..fork_removals import (
+    PIANO_ROLL_REMOVED,
+    PRESET_SELECTION_REMOVED,
+    FeatureRemovedError,
+)
 from .models import (
     AcceptedElementLock,
     CreationReviewModel,
@@ -20,6 +26,7 @@ from .models import (
     MetricExpectation,
     RevisionOperation,
     RevisionOperationBase,
+    RevisionOperationKind,
     RevisionPlan,
     RevisionRequest,
 )
@@ -185,6 +192,58 @@ def _operation_lock_kinds(operation: Any) -> tuple[str, ...]:
     return ()
 
 
+# Revision operations whose only implementation, in
+# RevisionExecutor.adapt_operations, is a run operation this fork removed: the
+# note rewrites become write_note_sequence, and sound and drum-kit changes
+# become select_plugin_preset and select_drum_kit. Planning and applying refuse
+# them, so a refused revision never spends a revision pass.
+_NOTE_REWRITE_REVISIONS = (
+    "transform_generated_sequence",
+    "create_section_note_variation",
+    "change_section_density",
+    "change_section_register",
+    "change_section_voicing",
+    "change_section_rhythm",
+    "change_section_velocity",
+    "change_section_articulation",
+)
+_PRESET_REVISIONS = ("change_sound_assignment", "change_drum_kit")
+REMOVED_REVISION_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType({
+    **{
+        name: "Revision operation %s rewrites notes through FL's Piano Roll. %s"
+        % (name, PIANO_ROLL_REMOVED)
+        for name in _NOTE_REWRITE_REVISIONS
+    },
+    **{
+        name: "Revision operation %s selects a plug-in preset or drum kit. %s"
+        % (name, PRESET_SELECTION_REMOVED)
+        for name in _PRESET_REVISIONS
+    },
+})
+if not set(REMOVED_REVISION_OPERATION_MESSAGES) <= set(get_args(RevisionOperationKind)):
+    raise RuntimeError("every removed revision operation must be a revision operation kind")
+
+
+def _revision_operation_kind(operation: Any) -> str:
+    if isinstance(operation, Mapping):
+        return str(operation.get("operation", ""))
+    return str(getattr(operation, "operation", ""))
+
+
+def refuse_removed_revision_operations(operations: Sequence[Any]) -> None:
+    """Raise FeatureRemovedError if any operation needs a feature this fork removed."""
+
+    removed = tuple(
+        dict.fromkeys(
+            REMOVED_REVISION_OPERATION_MESSAGES[kind]
+            for kind in map(_revision_operation_kind, operations)
+            if kind in REMOVED_REVISION_OPERATION_MESSAGES
+        )
+    )
+    if removed:
+        raise FeatureRemovedError(" ".join(removed))
+
+
 def validate_revision_plan(
     plan: RevisionPlan | Mapping[str, Any],
     *,
@@ -296,6 +355,9 @@ def validate_revision_plan(
             blockers.append(f"operation {operation.operation_id!r} references unknown feedback")
         if operation.operation_id in completed:
             blockers.append(f"operation {operation.operation_id!r} would rewrite an already-completed receipt")
+        removed_message = REMOVED_REVISION_OPERATION_MESSAGES.get(operation.operation)
+        if removed_message is not None:
+            blockers.append(f"operation {operation.operation_id!r}: {removed_message}")
         if operation.operation in {
             "transform_generated_sequence",
             "create_section_note_variation",
@@ -533,10 +595,12 @@ assert_revision_plan_valid = validate_revision_plan
 
 
 __all__ = [
+    "REMOVED_REVISION_OPERATION_MESSAGES",
     "RevisionPlanValidation",
     "assert_revision_plan_valid",
     "compile_revision_plan",
     "plan_revision",
+    "refuse_removed_revision_operations",
     "revision_plan_digest",
     "revision_request_digest",
     "validate_revision_plan",

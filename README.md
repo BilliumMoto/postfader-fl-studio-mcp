@@ -24,6 +24,12 @@
 
 ---
 
+> **This is a fork of PostFader 12.0.3.** It removes Piano Roll script
+> generation, plug-in preset selection, and the TCP and file transports, so its
+> live bridge to FL Studio uses only MIDI. It has 80 tools. See
+> [FORK.md](FORK.md) for what changed; the release, PyPI and download links
+> below point to upstream PostFader.
+
 PostFader is an **FL Studio MCP server**. It connects your AI assistant to the
 project you already have open, so the AI can read your mixer, channels,
 plug-ins and patterns, check your exported mix, write MIDI, and make changes
@@ -40,11 +46,11 @@ telemetry.
 | 🔎 **Understand a project** | *"Which instruments aren't routed to the mixer?"* | Reads routing, effects, channels, patterns, Playlist tracks, and plug-in parameters. |
 | 🩺 **Fix a mix** | *"What are the three biggest problems in this bounce?"* | Measures loudness, peaks, tonal balance, stereo width, and vocal masking in the files you export, and compares them with a reference. |
 | 🎛️ **Change the session** | *"Pan the backing vocals wider and pull the reverb send down 3 dB."* | Sets faders, pan, sends, routing, names, colors, tempo, transport, and any parameter a loaded plug-in exposes, then reads each one back. |
-| 🎹 **Write music** | *"Add an 8-bar D Dorian bassline under my chords."* | Generates chords, melodies, basslines, and drums; writes them to the Piano Roll or exports MIDI files. |
-| 🎚️ **Pick sounds** | *"Choose the sounds yourself from what's loaded."* | Picks presets on the instruments in your project and confirms each selection. |
-| 🧱 **Run a whole task** | *"Turn this loop into a 16-bar draft, but keep my vocal."* | Runs the job as a checked plan you can resume. Export a bounce and it can review the draft and plan one revision. |
+| 🎹 **Write music** | *"Write an 8-bar D Dorian bassline to a MIDI file I can drag in."* | Generates chords, melodies, basslines, and drums and exports MIDI files. This fork does not write to the Piano Roll. |
+| 🎚️ **Pick sounds** | *"Choose the sounds yourself from what's loaded."* | Plans which loaded instruments fit each role. This fork does not select presets. |
+| 🧱 **Run a whole task** | *"Set up patterns and section markers for a 16-bar arrangement, and leave my vocal alone."* | Runs the job as a checked plan you can resume. Export a bounce and it can review the draft and plan one revision. |
 
-Browse all 85 tools in the [tool reference](docs/tools.md).
+Browse all 80 tools in the [tool reference](docs/tools.md).
 
 ## Quick start
 
@@ -115,12 +121,12 @@ computer as FL Studio. `postfader setup` prints ready-to-paste configuration.
 | Guide | What's in it |
 | --- | --- |
 | [Setup and troubleshooting](docs/setup.md) | Installers, MIDI settings, every client, upgrades, and the doctor |
-| [Tool reference](docs/tools.md) | All 85 tools and 8 resources, grouped by task |
+| [Tool reference](docs/tools.md) | All 80 tools and 8 resources, grouped by task |
 | [FAQ](docs/faq.md) | Short answers to common questions and problems |
 | [Comparison](docs/comparison.md) | PostFader next to other FL Studio MCP servers and Gopher |
 | [Production Runs](docs/production-runs.md) | Multi-step jobs, resuming, and stopping |
 | [Creation Review](docs/creation-review.md) | Reviewing a draft bounce, revising it, and preparing delivery |
-| [Sound Selection](docs/sound-selection.md) | How PostFader picks presets from loaded instruments |
+| [Sound Selection](docs/sound-selection.md) | How PostFader plans sounds from loaded instruments (this fork does not select presets) |
 | [Plug-in support](docs/plugin-support.md) | Parameter control, presets, and compatibility reports |
 | [FL Studio limits](docs/fl-constraints.md) | What FL Studio's scripting API can't do |
 | [Security and privacy](SECURITY.md) | What runs where, and how to report a vulnerability |

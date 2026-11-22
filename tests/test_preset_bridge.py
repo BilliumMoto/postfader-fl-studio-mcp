@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Synthetic FL checks for bounded preset and Loop Starter bridge commands."""
+"""Synthetic FL checks for bounded preset reads and Loop Starter bridge commands.
+
+This fork removed preset selection, so plugin.select_preset is not tested here;
+tests/test_bridge.py checks that the bridge refuses it.
+"""
 
 from __future__ import annotations
 
@@ -157,44 +161,12 @@ class PresetBridgeTests(unittest.TestCase):
         self.assertEqual(result["pads"][0]["semitone_name"], "Note 36")
         self.assertTrue(result["pads"][1]["empty"])
 
-    def test_exact_name_and_index_use_shortest_navigation_and_later_ticks(self) -> None:
-        selected = self.install_effect(["A", "B", "C", "D"])
-        with mock.patch.object(
-            bridge.plugins, "nextPreset", wraps=bridge.plugins.nextPreset
-        ) as next_preset:
-            result, ticks = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_name": "C", "max_navigation_steps": 4}
-                )
-            )
-        self.assertEqual(result["outcome"], "verified")
-        self.assertTrue(result["verified"])
-        self.assertEqual(result["navigation_direction"], "next")
-        self.assertEqual(result["navigation_steps"], 2)
-        self.assertEqual(ticks, 2)
-        self.assertEqual(next_preset.call_count, 2)
-        self.assertEqual(result["after"]["name"], "C")
-        self.assertEqual(len(_state.UNDO), 1)
-
-        _state.reset()
-        selected = self.install_effect(["A", "B", "C", "D"])
-        with mock.patch.object(
-            bridge.plugins, "prevPreset", wraps=bridge.plugins.prevPreset
-        ) as prev_preset:
-            result, ticks = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_index": 3, "max_navigation_steps": 4}
-                )
-            )
-        self.assertEqual(result["outcome"], "verified")
-        self.assertEqual(result["navigation_direction"], "prev")
-        self.assertEqual(result["navigation_steps"], 1)
-        self.assertEqual(ticks, 1)
-        self.assertEqual(prev_preset.call_count, 1)
-        self.assertEqual(result["requested_preset_name"], "D")
-        self.assertIsNotNone(selected)
-
     def test_preset_owned_user_label_does_not_change_target_identity(self) -> None:
+        """Tested feature: a plug-in whose user label follows its preset keeps the same target identity when its preset changes.
+        Check: with the label reporting the current preset, reading the current preset before and after the plug-in moves to another preset gives the new label and an unchanged target fingerprint.
+        Mocks: the fake FL modules in tests/fakefl, with getPluginName patched so the user label is the current preset's name.
+        Test would be deprecated if: target fingerprints stop excluding a plug-in's user label.
+        """
         selected = self.install_effect(["A", "B", "C"])
         original_get_plugin_name = bridge.plugins.getPluginName
 
@@ -214,166 +186,15 @@ class PresetBridgeTests(unittest.TestCase):
             bridge.plugins, "getPluginName", side_effect=preset_owned_user_name
         ):
             before, _ = exhaust(bridge.cmd_plugin_current_preset(dict(EFFECT)))
-            result, ticks = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {
-                        **EFFECT,
-                        "preset_name": "C",
-                        "target_fingerprint": before["target_fingerprint"],
-                        "max_navigation_steps": 3,
-                    }
-                )
-            )
+            # This fork cannot select presets; move the fake plug-in to its
+            # third preset directly, as a user changing it in FL would.
+            selected.current_preset = 2
             after, _ = exhaust(bridge.cmd_plugin_current_preset(dict(EFFECT)))
 
         self.assertEqual(before["plugin_user_name"], "A")
         self.assertEqual(after["plugin_user_name"], "C")
+        self.assertEqual(after["current_preset_name"], "C")
         self.assertEqual(after["target_fingerprint"], before["target_fingerprint"])
-        self.assertEqual(result["outcome"], "verified")
-        self.assertTrue(result["verified"])
-        self.assertEqual(result["after"], {
-            "name": "C",
-            "index": 2,
-            "identity_status": "stable",
-        })
-        self.assertEqual(result["navigation_steps"], 1)
-        self.assertEqual(ticks, 1)
-
-    def test_indexed_selection_proves_duplicate_occurrence_from_navigation_path(self) -> None:
-        self.install_effect(["A", "Duplicate", "Duplicate"])
-        result, ticks = exhaust(
-            bridge.cmd_plugin_select_preset(
-                {**EFFECT, "preset_index": 2, "max_navigation_steps": 2}
-            )
-        )
-        self.assertEqual(result["outcome"], "verified")
-        self.assertTrue(result["verified"])
-        self.assertEqual(result["requested_preset_name"], "Duplicate")
-        self.assertEqual(result["requested_preset_index"], 2)
-        self.assertEqual(result["after"]["name"], "Duplicate")
-        self.assertEqual(result["after"]["index"], 2)
-        self.assertEqual(result["navigation_direction"], "prev")
-        self.assertEqual(result["navigation_steps"], 1)
-        self.assertEqual(ticks, 1)
-
-    def test_ambiguous_name_is_refused_before_dispatch(self) -> None:
-        self.install_effect(["A", "Duplicate", "B", "Duplicate"])
-        with self.assertRaises(ValueError):
-            exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_name": "Duplicate"}
-                )
-            )
-        self.assertEqual(_state.UNDO, [])
-
-    def test_bounded_fallback_proves_one_name_cycle_when_indexed_reads_fail(self) -> None:
-        self.install_effect(["A", "B", "C", "D"])
-        original = bridge.plugins.getName
-
-        def no_indexed_names(
-            index: int,
-            slot: int = -1,
-            flag: int = 0,
-            paramIndex: int = 0,
-            useGlobalIndex: bool = False,
-        ) -> str:
-            if flag == bridge.midi.FPN_Preset and paramIndex != bridge.midi.GPN_GetCurrentPreset:
-                raise RuntimeError("indexed names unsupported")
-            return original(index, slot, flag, paramIndex, useGlobalIndex)
-
-        with mock.patch.object(bridge.plugins, "getName", side_effect=no_indexed_names):
-            result, ticks = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_name": "B", "max_navigation_steps": 10}
-                )
-            )
-        self.assertEqual(result["navigation_direction"], "fallback_next")
-        self.assertEqual(result["outcome"], "verified")
-        self.assertTrue(result["verified"])
-        self.assertEqual(result["navigation_steps"], 5)
-        self.assertEqual(ticks, 5)
-
-        self.install_effect(["A", "B", "C", "B"])
-        with mock.patch.object(bridge.plugins, "getName", side_effect=no_indexed_names):
-            result, ticks = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_name": "B", "max_navigation_steps": 10}
-                )
-            )
-        self.assertEqual(result["outcome"], "unknown")
-        self.assertFalse(result["verified"])
-        self.assertLessEqual(ticks, 10)
-        self.assertTrue(any("ambiguous" in item for item in result["warnings"]))
-
-    def test_unstable_readback_and_dispatch_errors_never_claim_success_or_retry(self) -> None:
-        self.install_effect(["A", "B"])
-        with mock.patch.object(bridge.plugins, "getName", side_effect=RuntimeError("unsupported")):
-            with self.assertRaises(ValueError):
-                exhaust(
-                    bridge.cmd_plugin_select_preset(
-                        {**EFFECT, "preset_name": "B"}
-                    )
-                )
-        self.assertEqual(_state.UNDO, [])
-
-        self.install_effect(["A", "B"])
-        dispatches = 0
-
-        def fail_dispatch(*args: object, **kwargs: object) -> None:
-            nonlocal dispatches
-            dispatches += 1
-            raise RuntimeError("ambiguous transport failure")
-
-        with mock.patch.object(bridge.plugins, "nextPreset", side_effect=fail_dispatch):
-            result, _ = exhaust(
-                bridge.cmd_plugin_select_preset(
-                    {**EFFECT, "preset_name": "B"}
-                )
-            )
-        self.assertEqual(result["outcome"], "unknown")
-        self.assertFalse(result["verified"])
-        self.assertEqual(dispatches, 1)
-
-    def test_session_and_target_changes_stop_before_further_dispatch(self) -> None:
-        self.install_effect(["A", "B", "C"])
-        original_next = bridge.plugins.nextPreset
-        old_session = bridge.SESSION_FINGERPRINT
-
-        def change_session(*args: object, **kwargs: object) -> None:
-            original_next(*args, **kwargs)
-            bridge.SESSION_FINGERPRINT = "f" * 32
-
-        try:
-            with mock.patch.object(bridge.plugins, "nextPreset", side_effect=change_session):
-                result, _ = exhaust(
-                    bridge.cmd_plugin_select_preset(
-                        {
-                            **EFFECT,
-                            "preset_name": "B",
-                            "session_fingerprint": old_session,
-                        }
-                    )
-                )
-        finally:
-            bridge.SESSION_FINGERPRINT = old_session
-        self.assertEqual(result["outcome"], "unknown")
-        self.assertFalse(result["verified"])
-        self.assertTrue(any("session changed" in item for item in result["warnings"]))
-
-        self.install_effect(["A", "B"])
-        original_next = bridge.plugins.nextPreset
-
-        def change_target(*args: object, **kwargs: object) -> None:
-            original_next(*args, **kwargs)
-            _state.TRACKS[3].slots[0].name = "Replaced Target"
-
-        with mock.patch.object(bridge.plugins, "nextPreset", side_effect=change_target):
-            result, _ = exhaust(
-                bridge.cmd_plugin_select_preset({**EFFECT, "preset_name": "B"})
-            )
-        self.assertEqual(result["outcome"], "unknown")
-        self.assertFalse(result["verified"])
-        self.assertTrue(any("target identity changed" in item for item in result["warnings"]))
 
     def test_loop_starter_is_explicit_global_single_dispatch_and_unverified(self) -> None:
         channel = 1

@@ -11,6 +11,7 @@ from fl_studio_mcp.creation_review.feedback import (
     release_feedback_locks,
 )
 from fl_studio_mcp.creation_review.models import (
+    AdjustChannelMixOperation,
     ChangeSoundAssignmentOperation,
     CreatePlaylistHandoffDeltaOperation,
     CreationFeedback,
@@ -27,6 +28,7 @@ from fl_studio_mcp.creation_review.revision_executor import (
     RevisionExecutor,
 )
 from fl_studio_mcp.creation_review.revision_planner import (
+    REMOVED_REVISION_OPERATION_MESSAGES,
     compile_revision_plan,
     validate_revision_plan,
 )
@@ -52,6 +54,23 @@ class CreationReviewRevisionTests(unittest.TestCase):
             requested_objective="Improve the lead without changing its motif.",
             allowed_changes=("transform_generated_sequence",),
             authorized_to_modify=authorized,
+        )
+
+    def _mix_request(self, *, authorized: bool = True) -> RevisionRequest:
+        return RevisionRequest(
+            source_evaluation_id="evaluation-1",
+            source_run_id="run-1",
+            requested_objective="Sit the lead lower in the mix.",
+            allowed_changes=("adjust_channel_mix",),
+            authorized_to_modify=authorized,
+        )
+
+    def _mix_operation(self) -> AdjustChannelMixOperation:
+        return AdjustChannelMixOperation(
+            operation_id="mix-1",
+            finding_ids=("finding-1",),
+            role_id="main_lead",
+            parameters={"channel_index": 1, "volume_normalized": 0.5},
         )
 
     def _operation(self) -> TransformGeneratedSequenceOperation:
@@ -196,20 +215,30 @@ class CreationReviewRevisionTests(unittest.TestCase):
         self.assertEqual(build_feedback_locks(feedback), ())
 
     def test_planner_uses_canonical_operation_and_digest(self) -> None:
-        plan = compile_revision_plan(self._request(), (self._operation(),), review_session_id="session-1")
+        """Tested feature: compiling a revision plan keeps each operation's canonical kind and gives the plan a digest that validates.
+        Check: a channel-mix revision compiles to a plan holding that operation kind with a 64-character digest, and the plan validates against its request.
+        Mocks: none.
+        Test would be deprecated if: revision plans stop carrying canonical operations and digests.
+        """
+        plan = compile_revision_plan(self._mix_request(), (self._mix_operation(),), review_session_id="session-1")
         self.assertIsInstance(plan, RevisionPlan)
-        self.assertEqual(plan.operations[0].operation, "transform_generated_sequence")
+        self.assertEqual(plan.operations[0].operation, "adjust_channel_mix")
         self.assertEqual(len(plan.digest), 64)
-        self.assertTrue(validate_revision_plan(plan, request=self._request()).valid)
+        self.assertTrue(validate_revision_plan(plan, request=self._mix_request()).valid)
 
     def test_unauthorized_executor_never_calls_run_executor(self) -> None:
-        request = self._request(authorized=False)
+        """Tested feature: the revision executor never starts a Production Run for an unauthorized revision.
+        Check: applying a channel-mix revision whose request is not authorized is blocked with no run call and no authorization counted.
+        Mocks: the run executor, a recorder that must not be called.
+        Test would be deprecated if: revision application stops requiring authorization.
+        """
+        request = self._mix_request(authorized=False)
         plan = RevisionPlan(
             revision_plan_id="plan-1",
             review_session_id="session-1",
             source_evaluation_id=request.source_evaluation_id,
             source_run_id=request.source_run_id,
-            operations=(self._operation(),),
+            operations=(self._mix_operation(),),
         )
         context = RevisionExecutionContext(
             review_session_id="session-1",
@@ -225,13 +254,18 @@ class CreationReviewRevisionTests(unittest.TestCase):
         self.assertEqual(result.authorization_count, 0)
 
     def test_executor_has_one_preflight_and_delegates_one_production_plan(self) -> None:
-        request = self._request()
+        """Tested feature: applying a revision runs one readiness preflight and hands one bounded Production Run plan to the run engine.
+        Check: a channel-mix revision produces one run call with the captured session and project digests and a verified-batch channel mix, and the pass awaits a new bounce with one authorization and the run's id.
+        Mocks: the readiness checker, session capturer and run executor, as recording fakes.
+        Test would be deprecated if: revisions stop being applied through one Production Run.
+        """
+        request = self._mix_request()
         plan = RevisionPlan(
             revision_plan_id="plan-1",
             review_session_id="session-1",
             source_evaluation_id=request.source_evaluation_id,
             source_run_id=request.source_run_id,
-            operations=(self._operation(),),
+            operations=(self._mix_operation(),),
         )
         context = RevisionExecutionContext(
             review_session_id="session-1",
@@ -252,13 +286,7 @@ class CreationReviewRevisionTests(unittest.TestCase):
                 "write_mode_enable_count": 1,
                 "write_mode_disable_count": 1,
                 "write_mode_shutdown_verified": True,
-                "generated_outputs": (
-                    runs.ProductionGeneratedOutput(
-                        operation_id="transform-1",
-                        output="note_sequence",
-                        value=self._sequence(),
-                    ),
-                ),
+                "generated_outputs": (),
             }
 
         executor = RevisionExecutor(
@@ -276,20 +304,19 @@ class CreationReviewRevisionTests(unittest.TestCase):
         production_request, production_plan = calls[0]
         self.assertEqual(production_request.expected_session_fingerprint, "c" * 32)
         self.assertEqual(production_request.expected_project_state_digest, "d" * 64)
-        write = production_plan.operations[0]
-        self.assertEqual(write.operation, "write_note_sequence")
-        self.assertEqual(write.mode, "replace")
-        self.assertEqual([note.pitch for note in write.sequence.notes], [62, 66])
+        batch = production_plan.operations[0]
+        self.assertEqual(batch.operation, "apply_verified_batch")
+        self.assertEqual(batch.operations[0].channel_index, 1)
+        self.assertEqual(batch.operations[0].volume_normalized, 0.5)
         self.assertEqual(result.authorization_count, 1)
         self.assertEqual(result.continuation_run_id, "b" * 32)
-        self.assertEqual(result.generated_outputs[0].role_id, "main_lead")
-        self.assertEqual(result.generated_outputs[0].digest, self._sequence().note_digest_sha256)
-        self.assertEqual(
-            result.generated_outputs[0].metadata["note_digest_sha256"],
-            self._sequence().note_digest_sha256,
-        )
 
-    def test_missing_stored_sequence_blocks_before_run_execution(self) -> None:
+    def test_note_rewrite_revision_is_refused_before_run_execution(self) -> None:
+        """Tested feature: the revision executor refuses a note-rewrite revision, which this fork cannot apply, before starting a run.
+        Check: applying a stored-sequence transform is blocked with the removal message and no run call.
+        Mocks: the run executor, a recorder that must not be called.
+        Test would be deprecated if: this fork restores Piano Roll note writes.
+        """
         request = self._request()
         plan = RevisionPlan(
             revision_plan_id="plan-missing-sequence",
@@ -313,7 +340,10 @@ class CreationReviewRevisionTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "blocked")
         self.assertEqual(calls, [])
-        self.assertTrue(any("stored PostFader NoteSequence" in item for item in result.blockers))
+        self.assertIn(
+            REMOVED_REVISION_OPERATION_MESSAGES["transform_generated_sequence"],
+            " ".join(result.blockers),
+        )
 
     def test_palette_adapter_uses_canonical_selected_preset_fields(self) -> None:
         request = RevisionRequest(

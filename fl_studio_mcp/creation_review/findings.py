@@ -540,7 +540,7 @@ def build_evaluation_findings(
                 expected_target="intentional development between Drop A and Drop B",
                 explanation="Drop A and Drop B are measured as similar on the available proxies; this remains a low-confidence arrangement suggestion.",
                 actionability="actionable",
-                candidate_techniques=("create_section_note_variation", "increase_drop_b_density"),
+                candidate_techniques=("increase_drop_b_density",),
             )))
             sequence += 1
 

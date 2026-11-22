@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "postfader-fl-studio-mcp",
   "display_name": "PostFader for FL Studio",
-  "version": "12.0.3",
+  "version": "12.0.3+fork.1",
   "description": "FL Studio MCP server: read, mix, compose, and edit your open FL Studio project with Claude.",
-  "long_description": "PostFader connects Claude to the FL Studio project you have open. Claude can read the mixer, channels, plug-ins, and patterns; check exported mixes for loudness, peaks, tonal balance, and vocal masking; write chords, melodies, basslines, and drums; pick presets from the instruments you loaded; and run multi-step jobs. PostFader starts read-only, reads every supported change back from FL Studio, and never saves your project. Before installing this extension, install the matching Python package and run `postfader setup`: the extension does not install FL Studio's controller script or set up a virtual MIDI port.",
+  "long_description": "PostFader connects Claude to the FL Studio project you have open. Claude can read the mixer, channels, plug-ins, and patterns; check exported mixes for loudness, peaks, tonal balance, and vocal masking; generate chords, melodies, basslines, and drums and export them as MIDI files; plan sounds from the instruments you loaded; and run multi-step jobs. PostFader starts read-only, reads every supported change back from FL Studio, and never saves your project. Before installing this extension, install the matching Python package and run `postfader setup`: the extension does not install FL Studio's controller script or set up a virtual MIDI port.",
   "author": {
     "name": "ZEROD4Y"
   },
@@ -174,10 +174,6 @@
       "description": "Read a page of a loaded plug-in's preset names, its preset count, and current preset."
     },
     {
-      "name": "plugin_select_preset",
-      "description": "Load a known preset on one mixer effect or Channel Rack instrument."
-    },
-    {
       "name": "plugin_get_pad_map",
       "description": "Read an instrument's drum pads: MIDI note, color, and empty/muted state."
     },
@@ -227,7 +223,7 @@
     },
     {
       "name": "sound_apply_palette",
-      "description": "Apply the palette returned by sound_plan_palette, loading each role's preset."
+      "description": "Apply the palette returned by sound_plan_palette."
     },
     {
       "name": "sound_record_feedback",
@@ -290,22 +286,6 @@
       "description": "Write note sequences to a standard Type-1 MIDI file and verify it."
     },
     {
-      "name": "piano_roll_setup",
-      "description": "Prepare the one-time Piano Roll scripting setup that note tools need."
-    },
-    {
-      "name": "piano_roll_read_notes",
-      "description": "Read the notes of one channel in one pattern: pitch, timing, and expression."
-    },
-    {
-      "name": "piano_roll_write_notes",
-      "description": "Write notes into one channel's Piano Roll score in a pattern."
-    },
-    {
-      "name": "piano_roll_transform_notes",
-      "description": "Quantize, transpose, humanize, duplicate, delete, or clear existing notes."
-    },
-    {
       "name": "run_describe_operations",
       "description": "List Production Run operations and return exact schemas for the ones named."
     },
@@ -315,7 +295,7 @@
     },
     {
       "name": "run_execute",
-      "description": "Run a multi-step production plan, such as writing a chorus, as one task."
+      "description": "Run a multi-step production plan, such as arranging a section, as one task."
     },
     {
       "name": "run_continue",
