@@ -25,8 +25,8 @@
 ---
 
 > **This is a fork of PostFader 12.0.3.** It removes Piano Roll script
-> generation, plug-in preset selection, and the TCP and file transports, so the
-> server can reach FL Studio only over MIDI. It has 80 tools. See
+> generation, plug-in preset selection, and the TCP and file transports, so its
+> live bridge to FL Studio uses only MIDI. It has 80 tools. See
 > [FORK.md](FORK.md) for what changed; the release, PyPI and download links
 > below point to upstream PostFader.
 

@@ -1,6 +1,6 @@
 # Plugin Atlas
 
-> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; its live bridge to FL Studio uses only MIDI, and it has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
 
 Plugin Atlas is PostFader's bundled, versioned plug-in knowledge layer. It is
 loaded from package data and works offline; the normal runtime does not scrape

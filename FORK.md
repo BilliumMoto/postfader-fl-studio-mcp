@@ -6,8 +6,8 @@ FL Studio MCP server under the Apache License 2.0. Its version is
 `12.0.3+fork.1`.
 
 This fork removes Piano Roll script generation, plug-in preset selection, and
-the TCP and file transports, so the server can reach FL Studio only over MIDI.
-Everything else works as in upstream 12.0.3. The fork has 80 tools; upstream
+the TCP and file transports, so the live bridge between the server and
+FL Studio uses only MIDI. Everything else works as in upstream 12.0.3. The fork has 80 tools; upstream
 12.0.3 has 85.
 
 The fork is not published to PyPI or the MCP Registry. `server.json` keeps
@@ -43,28 +43,43 @@ agree with the package version.
   and `sound_plan_palette` are unchanged. Loop Starter rerolls, which are not
   presets, still work.
 
-### MIDI only
+### MIDI-only bridge
 
 - The FL Studio script starts only its MIDI SysEx transport.
 - `BridgeClient` builds only the MIDI transport and no longer takes `host`,
-  `port` or `mailbox` arguments; `FL_BRIDGE_HOST`, `FL_BRIDGE_PORT` and
-  `FL_BRIDGE_MAILBOX` have no effect. Without `FL_BRIDGE_ENABLE_MIDI=1` the
-  client has no transport, and every call reports that it could not reach
-  FL Studio, naming `FL_BRIDGE_ENABLE_MIDI` and `FL_BRIDGE_MIDI_PORT`.
+  `port` or `mailbox` arguments. It refuses to start while `FL_BRIDGE_HOST`,
+  `FL_BRIDGE_PORT` or `FL_BRIDGE_MAILBOX` is set. Without
+  `FL_BRIDGE_ENABLE_MIDI=1` the client has no transport, and every call
+  reports that it could not reach FL Studio, naming `FL_BRIDGE_ENABLE_MIDI`
+  and `FL_BRIDGE_MIDI_PORT`.
 - The TCP and file mailbox transport classes stay in the code because the
   tests use them as a deterministic fake FL Studio; nothing in the package
   constructs them.
+- The bridge is the only connection the fork narrows. Two tools still reach
+  FL Studio another way, as in upstream: on macOS, `plugin_list_available`
+  and `plugin_load` drive FL Studio's menus through System Events, which
+  focuses FL Studio and sends it keystrokes, and `render_start_job` starts a
+  separate FL Studio process to render a saved project.
 
 ### Clean refusals
 
 - Production Runs refuse, at validation and before anything is written, any
   plan containing `write_note_sequence`, `transform_piano_roll`,
-  `apply_creation_revision`, `select_plugin_preset` or `select_drum_kit`.
-  `review_apply_revision` reaches the same validation. The planners that
-  change nothing (`plan_sound_palette`, `create_sound_palette_variation`,
-  `plan_creation_revision`) still work.
-- `sound_apply_palette`, and the `apply_sound_palette` run operation, refuse a
-  palette before any write if any role being applied would select a preset.
+  `select_plugin_preset`, `select_drum_kit` or `apply_creation_revision`.
+  A creation revision may produce note writes or preset or drum-kit
+  selections, so the fork refuses `apply_creation_revision` inside a
+  Production Run; `review_apply_revision` applies revisions that contain none
+  of them, and refuses, at the same validation, a revision that does.
+- `run_describe_operations` lists those five operations as unavailable, with
+  the reason for each, and the run tools' schemas no longer offer them.
+- The planners that change nothing (`plan_sound_palette`,
+  `create_sound_palette_variation`, `plan_creation_revision`) still work.
+- `sound_apply_palette` refuses a palette, before any write, if any role being
+  applied would select a preset. In a Production Run, an `apply_sound_palette`
+  operation that carries its palette inline is refused at validation, before
+  anything in the run is written. One that applies a palette produced by an
+  earlier step of the same run is refused only when it is reached, so earlier
+  operations in that run may already have applied.
 
 ### Other
 
@@ -91,7 +106,8 @@ functions, and the TCP and file transport classes stay in place, unreachable.
    `_SocketTransport`, `_TcpTransport` and `_FileTransport`, and check that no
    new tool, FL Studio script command, run operation or transport reaches a
    removed feature. Add any new run operation that does to
-   `_REMOVED_FEATURE_OPERATION_MESSAGES` in `fl_studio_mcp/production_runs.py`.
+   `REMOVED_FEATURE_OPERATION_MESSAGES` in `fl_studio_mcp/production_runs.py`;
+   `run_describe_operations` and the run tools' schemas follow it.
 3. Set the version to `<upstream version>+fork.1` in `pyproject.toml`,
    `fl_studio_mcp/__init__.py`, `server.json` (both places) and
    `manifest.json`.
