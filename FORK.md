@@ -81,8 +81,10 @@ agree with the package version.
   `fl_studio_mcp/creation_review/revision_planner.py`). `review_plan_revision`
   refuses them without recording a plan, and `review_apply_revision` refuses
   a recorded plan holding one before recording a revision pass, so a refused
-  revision never uses up the session's revision passes. The arrangement
-  finding no longer suggests `create_section_note_variation`.
+  revision never uses up the session's revision passes. The input schemas of
+  `review_plan_revision` and `review_apply_revision` still list these ten
+  revision kinds; they are refused at planning, so no pass is spent. The
+  arrangement finding no longer suggests `create_section_note_variation`.
 - `run_describe_operations` lists the five run operations as unavailable,
   and `unavailable_reasons` in its result gives the reason for every
   unavailable operation. The run tools' schemas no longer offer the five.
@@ -96,6 +98,10 @@ agree with the package version.
   earlier step of the same run is refused when the run reaches it, before
   write mode is enabled or anything is dispatched for it; earlier operations
   in that run may already have applied.
+- A section variation (`SoundPaletteVariationPlan`) is recorded in its base
+  palette's section variations when it is planned, so one refused for a
+  preset role stays recorded there. Planning the same variation again reuses
+  that record, but it uses one of the base palette's bounded variation slots.
 
 ### Other
 
@@ -121,8 +127,11 @@ agree with the package version.
 
 To keep upstream releases easy to merge, the fork cuts the removed features
 off instead of deleting every module. The shared data models, the FL Studio
-script's handlers for the removed commands, the bodies of the refusing server
+script's handlers for the removed commands, the bodies of most refusing server
 functions, and the TCP and file transport classes stay in place, unreachable.
+The bodies of `_atomic_text`, which wrote the Piano Roll script, and
+`_trigger_piano_roll_shortcut`, which focused FL Studio and sent the
+shortcut, were deleted.
 
 ## Merging an upstream release
 
@@ -133,7 +142,12 @@ functions, and the TCP and file transport classes stay in place, unreachable.
    new tool, FL Studio script command, run operation or transport reaches a
    removed feature. Add any new run operation that does to
    `REMOVED_FEATURE_OPERATION_MESSAGES` in `fl_studio_mcp/production_runs.py`;
-   `run_describe_operations` and the run tools' schemas follow it. If the
+   `run_describe_operations` and the run tools' schemas follow it. Check
+   `RevisionExecutor.adapt_operations` in
+   `fl_studio_mcp/creation_review/revision_executor.py`, and add any revision
+   kind that maps to a removed run operation to
+   `REMOVED_REVISION_OPERATION_MESSAGES` in
+   `fl_studio_mcp/creation_review/revision_planner.py`. If the
    merge adds a palette `selection_action`, the package refuses to import
    until `KNOWN_SELECTION_ACTIONS` and `APPLICABLE_SELECTION_ACTIONS` in
    `fl_studio_mcp/fork_removals.py` are reviewed.

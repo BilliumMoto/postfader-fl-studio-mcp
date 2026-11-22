@@ -8,9 +8,10 @@ either feature raise ``FeatureRemovedError`` with one of the messages below,
 and Production Runs and sound palettes refuse plans that need them before
 anything is written.
 
-The fork's live bridge to FL Studio also uses only MIDI; that change needs no
-error of its own, because a client without MIDI has no transport and reports
-the existing not-connected error.
+The fork's live bridge to FL Studio also uses only MIDI. A client without MIDI
+enabled has no transport and reports the existing not-connected error, and
+``bridge_client.BridgeClient`` raises ``RemovedTransportSettingsError``
+(defined in ``bridge_client.py``) when a TCP or file mailbox setting is set.
 """
 
 from __future__ import annotations
