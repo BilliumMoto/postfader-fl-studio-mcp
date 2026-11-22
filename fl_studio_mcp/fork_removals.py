@@ -30,3 +30,20 @@ PRESET_SELECTION_REMOVED = (
     "Plug-in preset selection is removed in this fork of PostFader: it does "
     "not select plug-in presets or drum kits."
 )
+
+# Every value of SoundPaletteAssignment.selection_action, and the ones this
+# fork can still apply. Palette application allows only the listed actions,
+# so an action added upstream is refused until it is reviewed here.
+KNOWN_SELECTION_ACTIONS = frozenset({"keep_current", "select_preset", "loop_starter_reroll"})
+APPLICABLE_SELECTION_ACTIONS = frozenset({"keep_current", "loop_starter_reroll"})
+
+
+def check_selection_actions(actions: frozenset[str] | set[str]) -> None:
+    """Fail loudly when the palette model's selection actions differ from the reviewed set."""
+
+    if set(actions) != KNOWN_SELECTION_ACTIONS:
+        raise RuntimeError(
+            "SoundPaletteAssignment.selection_action values %s differ from the "
+            "set this fork reviewed, %s; review fork_removals.py before using "
+            "them" % (sorted(actions), sorted(KNOWN_SELECTION_ACTIONS))
+        )

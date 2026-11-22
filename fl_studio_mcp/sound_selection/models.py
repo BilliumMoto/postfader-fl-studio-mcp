@@ -13,10 +13,11 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from ..fork_removals import check_selection_actions
 from ..plugin_atlas.models import ProductKnowledge
 from ..track_b_contracts import PluginTarget
 
@@ -1230,6 +1231,13 @@ class SoundPaletteAssignment(SoundSelectionModel):
                 "preset_index": self.selected_preset_index,
             }
         )[:24]
+
+
+# This fork applies only some selection actions; a value added upstream must
+# be reviewed there before palettes can carry it (fork_removals.py).
+check_selection_actions(
+    frozenset(get_args(SoundPaletteAssignment.model_fields["selection_action"].annotation))
+)
 
 
 class SoundPaletteVariation(SoundSelectionModel):

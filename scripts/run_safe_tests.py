@@ -89,6 +89,7 @@ SAFE_TESTS = (
     "tests/test_live_creation_review_acceptance.py",
     "tests/test_production_runs.py",
     "tests/test_production_run_persistence.py",
+    "tests/test_preset_bridge.py",
     "tests/test_preset_contracts.py",
     "tests/test_preset_performance.py",
     "tests/test_sound_selection_core.py",

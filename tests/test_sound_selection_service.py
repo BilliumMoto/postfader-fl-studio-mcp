@@ -133,6 +133,11 @@ class FakeMode:
 class FakeController:
     def __init__(self) -> None:
         self.calls = []
+        self.reroll_calls = []
+
+    def reroll_loop_starter_loop(self, **kwargs):
+        self.reroll_calls.append(kwargs)
+        return SimpleNamespace(warnings=())
 
     def select_plugin_preset(self, **kwargs):
         self.calls.append(kwargs)
@@ -210,6 +215,117 @@ class SoundSelectionServiceTests(unittest.TestCase):
             now=lambda: STAMP,
         )
         return service, inspector, controller, mode, history
+
+    def loop_starter_plan(self, service):
+        """Plan one texture role onto a loaded Loop Starter channel."""
+
+        inventory = SoundInventory(
+            session_fingerprint=SESSION,
+            loaded_generators=(
+                SoundTargetInventory(
+                    target=TARGET,
+                    target_fingerprint=TARGET_FINGERPRINT,
+                    product_id="loop-starter",
+                    product_name="Loop Starter",
+                    source_strategy="loop_starter",
+                    current_preset="Loop A",
+                    current_preset_index=0,
+                    preset_names=("Loop A",),
+                    preset_indices=(0,),
+                    preset_navigation_available=True,
+                    preset_identity_stable=True,
+                    preset_readback_available=True,
+                ),
+            ),
+        )
+        request = SoundSelectionRequest(
+            brief="a fresh loop",
+            source_strategy="loop_starter",
+            roles=(SoundRoleRequest(role_id="loop", role_type="texture"),),
+        )
+        plan = service.plan(request, inventory=inventory)
+        self.assertEqual(plan.assignments[0].selection_action, "loop_starter_reroll")
+        return plan
+
+    def test_loop_starter_apply_enables_write_mode_once_and_never_redispatches(self):
+        """Tested feature: applying a Loop Starter role enables write mode once, dispatches once, and is never repeated by a later apply.
+        Check: the first apply enables write mode and rerolls once, then stops with an unverified, dispatch-only receipt; a second apply of the same palette stops on the recorded blockers without re-enabling write mode or rerolling.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palettes stop applying Loop Starter rerolls.
+        """
+        with TemporaryDirectory() as directory:
+            service, _, controller, mode, history = self.make_service(directory)
+            plan = self.loop_starter_plan(service)
+            first = service.apply(plan, SESSION, True)
+            second = service.apply(plan.palette_id, SESSION, True)
+
+        self.assertEqual(first.status, "failed")
+        self.assertFalse(first.assignment_receipts[0].verified)
+        self.assertIn("dispatch completed", first.assignment_receipts[0].verification_summary)
+        self.assertEqual(len(controller.reroll_calls), 1)
+        self.assertEqual(controller.reroll_calls[0]["channel_index"], TARGET.channel_index)
+        self.assertEqual(controller.calls, [])
+        self.assertEqual(len(mode.calls), 1)
+        self.assertEqual(history.usage_calls, [])
+        self.assertEqual(second.status, "failed")
+        # The palette keeps the first outcome's blockers, so a second apply
+        # stops before reaching FL.
+        self.assertEqual(second.blockers, first.blockers)
+        self.assertEqual(len(controller.reroll_calls), 1)
+        self.assertEqual(len(mode.calls), 1)
+
+    def test_unknown_loop_starter_outcome_is_recorded_and_never_replayed(self):
+        """Tested feature: a Loop Starter reroll whose outcome is unknown is recorded as unverified and never replayed.
+        Check: a reroll that raises leaves an unverified receipt saying no automatic retry is allowed, and a second apply stops on the recorded blockers without rerolling again.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes whose reroll raises.
+        Test would be deprecated if: palettes stop applying Loop Starter rerolls.
+        """
+        with TemporaryDirectory() as directory:
+            service, _, controller, _, _ = self.make_service(directory)
+            plan = self.loop_starter_plan(service)
+
+            def ambiguous(**kwargs):
+                controller.reroll_calls.append(kwargs)
+                raise TimeoutError("synthetic unknown transport outcome")
+
+            controller.reroll_loop_starter_loop = ambiguous
+            first = service.apply(plan, SESSION, True)
+            second = service.apply(plan.palette_id, SESSION, True)
+
+        self.assertEqual(first.status, "failed")
+        self.assertFalse(first.assignment_receipts[0].verified)
+        self.assertIn(
+            "no automatic retry", first.assignment_receipts[0].verification_summary
+        )
+        self.assertEqual(second.status, "failed")
+        # The palette keeps the first outcome's blockers, so a second apply
+        # stops before reaching FL.
+        self.assertEqual(second.blockers, first.blockers)
+        self.assertEqual(len(controller.reroll_calls), 1)
+
+    def test_selection_action_guard_fails_loudly_on_an_unreviewed_value(self):
+        """Tested feature: a palette selection action this fork has not reviewed stops the package from loading instead of being applied.
+        Check: the guard accepts the palette model's current actions, raises on an added or missing value, and the actions palettes may apply exclude preset selection.
+        Mocks: none.
+        Test would be deprecated if: palette selection actions stop being checked against a reviewed set.
+        """
+        from typing import get_args
+
+        from fl_studio_mcp import fork_removals
+        from fl_studio_mcp.sound_selection.models import SoundPaletteAssignment
+
+        current = frozenset(
+            get_args(SoundPaletteAssignment.model_fields["selection_action"].annotation)
+        )
+        fork_removals.check_selection_actions(current)
+        with self.assertRaisesRegex(RuntimeError, "review fork_removals.py"):
+            fork_removals.check_selection_actions(current | {"select_sample"})
+        with self.assertRaisesRegex(RuntimeError, "review fork_removals.py"):
+            fork_removals.check_selection_actions(current - {"keep_current"})
+        self.assertEqual(
+            fork_removals.APPLICABLE_SELECTION_ACTIONS,
+            {"keep_current", "loop_starter_reroll"},
+        )
 
     def test_inventory_scans_once_reuses_target_scan_and_reads_bounded_surfaces(self):
         with TemporaryDirectory() as directory:

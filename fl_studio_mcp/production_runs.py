@@ -18,7 +18,8 @@ import secrets
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal, TypeAlias, cast, get_args
+from types import MappingProxyType
+from typing import Annotated, Any, Literal, Mapping, TypeAlias, cast, get_args
 
 from pydantic import ConfigDict, Field, StrictBool, model_validator
 
@@ -126,6 +127,7 @@ from .creative import (
     write_piano_roll_notes,
 )
 from .fork_removals import (
+    APPLICABLE_SELECTION_ACTIONS,
     PIANO_ROLL_REMOVED,
     PRESET_SELECTION_REMOVED,
     FeatureRemovedError,
@@ -1635,6 +1637,12 @@ _UNAVAILABLE_OPERATION_MESSAGES: dict[str, str] = {
     ),
 }
 
+# A read-only public view of _UNAVAILABLE_OPERATION_MESSAGES, which the
+# operation catalog in tool_schemas.py reports alongside the removed features.
+UNAVAILABLE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType(
+    _UNAVAILABLE_OPERATION_MESSAGES
+)
+
 # Operations whose only implementation writes Piano Roll notes or selects a
 # plug-in preset. This fork removed both features, so a plan containing any of
 # them fails structural validation before anything is written, and dispatch
@@ -2745,13 +2753,15 @@ def _structural_validation(
         ):
             # This fork removed preset selection. Refuse an inline palette here,
             # before anything in the run is written, if any role it would apply
-            # selects a preset. A palette produced by an earlier step is only
-            # known at dispatch, where the palette executor refuses it.
+            # has an action this fork cannot apply (it can only keep the current
+            # preset or reroll Loop Starter). A palette produced by an earlier
+            # step is only known at dispatch, where the palette executor
+            # refuses it.
             applied_role_keys = {item.casefold() for item in operation.role_ids}
             preset_roles = tuple(
                 item.role_id
                 for item in operation.palette.assignments
-                if item.selection_action == "select_preset"
+                if item.selection_action not in APPLICABLE_SELECTION_ACTIONS
                 and (not applied_role_keys or item.role_id.casefold() in applied_role_keys)
             )
             if preset_roles:
