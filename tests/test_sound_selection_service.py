@@ -216,36 +216,243 @@ class SoundSelectionServiceTests(unittest.TestCase):
         )
         return service, inspector, controller, mode, history
 
+    @staticmethod
+    def loop_starter_target(target=TARGET, fingerprint=TARGET_FINGERPRINT, loop="Loop A"):
+        """One loaded Loop Starter channel, as the live inventory reports it."""
+
+        return SoundTargetInventory(
+            target=target,
+            target_fingerprint=fingerprint,
+            product_id="loop-starter",
+            product_name="Loop Starter",
+            source_strategy="loop_starter",
+            current_preset=loop,
+            current_preset_index=0,
+            preset_names=(loop,),
+            preset_indices=(0,),
+            preset_navigation_available=True,
+            preset_identity_stable=True,
+            preset_readback_available=True,
+        )
+
+    LOOP_REQUEST = SoundSelectionRequest(
+        brief="a fresh loop",
+        source_strategy="loop_starter",
+        roles=(SoundRoleRequest(role_id="loop", role_type="texture"),),
+    )
+
     def loop_starter_plan(self, service):
         """Plan one texture role onto a loaded Loop Starter channel."""
 
         inventory = SoundInventory(
             session_fingerprint=SESSION,
-            loaded_generators=(
-                SoundTargetInventory(
-                    target=TARGET,
-                    target_fingerprint=TARGET_FINGERPRINT,
-                    product_id="loop-starter",
-                    product_name="Loop Starter",
-                    source_strategy="loop_starter",
-                    current_preset="Loop A",
+            loaded_generators=(self.loop_starter_target(),),
+        )
+        plan = service.plan(self.LOOP_REQUEST, inventory=inventory)
+        self.assertEqual(plan.assignments[0].selection_action, "loop_starter_reroll")
+        return plan
+
+    def test_replanning_identical_palette_preserves_completed_receipts(self):
+        """Tested feature: replanning the same request on the same inventory returns the same palette and keeps its receipts.
+        Check: after a Loop Starter apply, an identical plan has the same palette_id and unchanged receipts, and applying it again does not reroll.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palettes stop being registered by their plan identity.
+        """
+        with TemporaryDirectory() as directory:
+            service, _, controller, _, _ = self.make_service(directory)
+            plan = self.loop_starter_plan(service)
+            service.apply(plan, SESSION, True)
+            receipts = service.get(plan.palette_id).apply_receipts
+
+            repeated = service.plan(
+                self.LOOP_REQUEST,
+                inventory=SoundInventory(
+                    session_fingerprint=SESSION,
+                    loaded_generators=(self.loop_starter_target(),),
+                ),
+            )
+            state = service.get(repeated.palette_id)
+            again = service.apply(repeated.palette_id, SESSION, True)
+
+        self.assertEqual(repeated.palette_id, plan.palette_id)
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(state.apply_receipts, receipts)
+        self.assertEqual(again.status, "failed")
+        self.assertEqual(len(controller.reroll_calls), 1)
+
+    def test_apply_rejects_current_read_for_replaced_target(self):
+        """Tested feature: palette application stops when the live current-preset read comes from a replaced plug-in.
+        Check: a keep-current palette whose target now reports another fingerprint fails with the target-identity blocker and no controller or write-mode call.
+        Mocks: the FL inspector, whose current-preset read reports a replaced target, plus the recording controller, write-mode manager and history.
+        Test would be deprecated if: palette application stops checking target identity on live reads.
+        """
+        with TemporaryDirectory() as directory:
+            service, inspector, controller, mode, _ = self.make_service(directory)
+            inventory = SoundInventory(
+                session_fingerprint=SESSION,
+                loaded_generators=(
+                    SoundTargetInventory(
+                        target=TARGET,
+                        target_fingerprint=TARGET_FINGERPRINT,
+                        product_name="Synthetic Synth",
+                        current_preset="Current",
+                        current_preset_index=0,
+                        preset_names=("Current",),
+                        preset_indices=(0,),
+                        preset_navigation_available=True,
+                        preset_identity_stable=True,
+                        preset_readback_available=True,
+                    ),
+                ),
+            )
+            plan = service.plan(
+                SoundSelectionRequest(
+                    brief="keep the lead",
+                    roles=(
+                        SoundRoleRequest(
+                            role_id="main_lead",
+                            role_type="lead",
+                            preferred_presets=("Current",),
+                        ),
+                    ),
+                ),
+                inventory=inventory,
+            )
+            self.assertEqual(plan.assignments[0].selection_action, "keep_current")
+            replaced_summary = inspector.summary.model_copy(
+                update={"target_fingerprint": "c" * 64}
+            )
+
+            def replaced_current(*, target, allow_master=False):
+                return PluginCurrentPreset(
+                    observed_at=STAMP,
+                    plugin=replaced_summary,
+                    preset_count=1,
+                    current_preset_name="Current",
                     current_preset_index=0,
-                    preset_names=("Loop A",),
-                    preset_indices=(0,),
-                    preset_navigation_available=True,
-                    preset_identity_stable=True,
-                    preset_readback_available=True,
+                    current_preset_status="stable",
+                    session_fingerprint=SESSION,
+                )
+
+            inspector.get_plugin_current_preset = replaced_current
+            result = service.apply(plan, SESSION, True)
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("target identity changed", " ".join(result.blockers))
+        self.assertEqual(controller.calls, [])
+        self.assertEqual(controller.reroll_calls, [])
+        self.assertEqual(mode.calls, [])
+
+    def test_scoped_apply_with_pre_enabled_write_mode_applies_only_that_role(self):
+        """Tested feature: a scoped palette apply touches only the named roles and, when write mode is already on, does not switch it again.
+        Check: with a Loop Starter role and a keep-current role planned, applying only the Loop Starter role with write_mode_already_enabled rerolls once, makes no write-mode call, and scopes the result to that role.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palette application stops supporting role_ids or write_mode_already_enabled.
+        """
+        synth_target = ChannelGeneratorTarget(channel_index=4)
+        with TemporaryDirectory() as directory:
+            service, _, controller, mode, _ = self.make_service(directory)
+            inventory = SoundInventory(
+                session_fingerprint=SESSION,
+                loaded_generators=(
+                    self.loop_starter_target(),
+                    SoundTargetInventory(
+                        target=synth_target,
+                        target_fingerprint="e" * 64,
+                        product_id="synthetic",
+                        product_name="Synthetic Synth",
+                        current_preset="Current",
+                        current_preset_index=0,
+                        preset_names=("Current",),
+                        preset_indices=(0,),
+                        preset_navigation_available=True,
+                        preset_identity_stable=True,
+                        preset_readback_available=True,
+                    ),
+                ),
+            )
+            plan = service.plan(
+                SoundSelectionRequest(
+                    brief="a loop and the current lead",
+                    source_strategy="mixed",
+                    roles=(
+                        SoundRoleRequest(
+                            role_id="loop",
+                            role_type="texture",
+                            target_candidates=(TARGET,),
+                        ),
+                        SoundRoleRequest(
+                            role_id="lead",
+                            role_type="lead",
+                            preferred_presets=("Current",),
+                            target_candidates=(synth_target,),
+                        ),
+                    ),
+                ),
+                inventory=inventory,
+            )
+            actions = {item.role_id: item.selection_action for item in plan.assignments}
+            self.assertEqual(actions, {"loop": "loop_starter_reroll", "lead": "keep_current"})
+            result = service.apply(
+                plan,
+                SESSION,
+                True,
+                role_ids=("loop",),
+                write_mode_already_enabled=True,
+            )
+
+        self.assertEqual([item.role_id for item in result.assignment_scope], ["loop"])
+        self.assertEqual(len(controller.reroll_calls), 1)
+        self.assertEqual(controller.reroll_calls[0]["channel_index"], TARGET.channel_index)
+        self.assertEqual(mode.calls, [])
+        self.assertEqual(controller.calls, [])
+
+    def test_loop_starter_section_variation_applies_only_its_delta(self):
+        """Tested feature: applying a section variation acts only on the variation's own assignments.
+        Check: a Loop Starter variation of a one-role palette is registered on its base palette, and applying it scopes the result and its receipt to the variation's assignment, with one reroll.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palettes stop supporting section variations.
+        """
+        request = SoundSelectionRequest(
+            brief="vary the loop in the drop",
+            source_strategy="loop_starter",
+            roles=(
+                SoundRoleRequest(
+                    role_id="texture",
+                    role_type="texture",
+                    allow_section_variation=True,
                 ),
             ),
         )
-        request = SoundSelectionRequest(
-            brief="a fresh loop",
-            source_strategy="loop_starter",
-            roles=(SoundRoleRequest(role_id="loop", role_type="texture"),),
+        inventory = SoundInventory(
+            session_fingerprint=SESSION,
+            loaded_generators=(
+                self.loop_starter_target(),
+                self.loop_starter_target(
+                    target=ChannelGeneratorTarget(channel_index=5),
+                    fingerprint="f" * 64,
+                    loop="Loop B",
+                ),
+            ),
         )
-        plan = service.plan(request, inventory=inventory)
-        self.assertEqual(plan.assignments[0].selection_action, "loop_starter_reroll")
-        return plan
+        with TemporaryDirectory() as directory:
+            service, _, controller, _, _ = self.make_service(directory)
+            plan = service.plan(request, inventory=inventory)
+            variation = service.create_variation(
+                plan.palette_id, request, section="drop_b", inventory=inventory
+            )
+            applied = service.apply(variation, SESSION, True)
+            state = service.get(plan.palette_id)
+
+        self.assertEqual(len(variation.assignments), 1)
+        self.assertEqual(variation.assignments[0].selection_action, "loop_starter_reroll")
+        self.assertEqual(applied.assignment_scope, variation.assignments)
+        self.assertEqual(
+            applied.assignment_receipts[-1].assignment_id,
+            variation.assignments[0].assignment_id,
+        )
+        self.assertEqual(len(controller.reroll_calls), 1)
+        self.assertEqual(state.section_variations[0].variation_id, variation.variation_id)
 
     def test_loop_starter_apply_enables_write_mode_once_and_never_redispatches(self):
         """Tested feature: applying a Loop Starter role enables write mode once, dispatches once, and is never repeated by a later apply.

@@ -48,6 +48,7 @@ SAFE_TESTS = (
     "tests/test_bridge.py",
     "tests/test_audio.py",
     "tests/test_advisory.py",
+    "tests/test_bridge_client_roundtrip.py",
     "tests/test_readonly.py",
     "tests/test_readonly_mcp.py",
     "tests/test_sdk_compatibility.py",

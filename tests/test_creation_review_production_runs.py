@@ -387,10 +387,10 @@ class CreationReviewProductionRunTests(unittest.TestCase):
         self.assertEqual(result.write_mode_enable_count, 0)
 
     def test_outer_apply_creation_revision_is_refused_before_dispatch(self) -> None:
-        """Tested feature: a run that applies a creation revision is refused before anything runs, because this fork removed Piano Roll note writes.
+        """Tested feature: a run that applies a creation revision is refused before anything runs, because a revision may need note writes or preset or drum-kit selection.
         Check: executing a plan with apply_creation_revision is blocked by the removal blocker, with no dispatch and no write-mode change.
         Mocks: operation dispatch and the write-mode manager, as recorders that must not be called.
-        Test would be deprecated if: this fork restores Piano Roll note writes.
+        Test would be deprecated if: this fork restores Piano Roll note writes and preset selection.
         """
         revision_request = RevisionRequest(
             source_evaluation_id="evaluation-1",

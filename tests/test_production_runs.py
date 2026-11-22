@@ -781,7 +781,7 @@ class ProductionRunTests(unittest.TestCase):
         self,
     ) -> None:
         """Tested feature: continuing a run with a revised request re-evaluates readiness from the cached live facts.
-        Check: a processing-and-pattern run blocked by its mix-ready target's missing processing completes after a continuation that lowers the target, without collecting readiness again, and records the continued operation.
+        Check: a processing-and-pattern run blocked by its mix-ready target's missing processing completes, fully ready, after a continuation that lowers the target, without collecting readiness again; no limitation remains because only a pending note write added one.
         Mocks: readiness collection, project-state capture, session matching, the write-mode manager and operation dispatch.
         Test would be deprecated if: continuations stop reusing cached readiness facts.
         """
@@ -804,15 +804,6 @@ class ProductionRunTests(unittest.TestCase):
             pattern_count=8,
             playlist_track_count=8,
             transport=TransportState(playing=False, recording=False),
-        )
-        piano = PianoRollReadiness(
-            required=True,
-            apply_script_present=True,
-            armed_this_process=True,
-            authenticated_arming_receipt=True,
-            arming_receipt_id="piano-receipt",
-            target_selection_supported=True,
-            persistence_receipt_supported=True,
         )
         missing = MissingProcessingCapability(
             category="requested_first_pass_processing",
@@ -852,17 +843,10 @@ class ProductionRunTests(unittest.TestCase):
             session_fingerprint=SESSION,
             project=project,
             mcp_process_identity=MCP_PROCESS_IDENTITY,
-            piano_roll_arming_receipt=PianoRollArmingReceipt(
-                receipt_id="piano-receipt",
-                process_identity=MCP_PROCESS_IDENTITY,
-                authenticated=True,
-                script_present=True,
-            ),
         )
         facts = CreationReadinessInput(
             connection=readiness_connection,
             project=project,
-            piano_roll=piano,
             effects=effects,
             completion_target="mix_ready",
             processing_required=True,

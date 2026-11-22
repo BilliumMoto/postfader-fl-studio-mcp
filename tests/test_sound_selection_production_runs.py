@@ -151,6 +151,30 @@ def variation(base: SoundPalettePlan) -> SoundPaletteVariationPlan:
 
 
 class SoundSelectionProductionRunTests(unittest.TestCase):
+    def test_palette_target_outputs_carry_the_assignment_fingerprint(self) -> None:
+        """Tested feature: a palette's generator-target output carries the target fingerprint of its role's assignment.
+        Check: generating the outputs of a palette whose assignments carry a fingerprint yields a generator_target output for the role with that fingerprint.
+        Mocks: none.
+        Test would be deprecated if: palette outputs stop carrying target fingerprints.
+        """
+        target_fingerprint = "c" * 64
+        assignments = tuple(
+            item.model_copy(update={"target_fingerprint": target_fingerprint})
+            for item in palette().assignments
+        )
+        planned = palette().model_copy(update={"assignments": assignments})
+        generated = runs._generated_outputs_for(
+            runs.PlanSoundPaletteOperation(
+                operation_id="palette", request=sound_request()
+            ),
+            planned,
+        )
+        outputs = {
+            (item.operation_id, item.output, item.role_id): item for item in generated
+        }
+        target_output = outputs[("palette", "generator_target", "main_lead")]
+        self.assertEqual(target_output.target_fingerprint, target_fingerprint)
+
     def test_palette_outputs_validate_role_target_reference(self) -> None:
         """Tested feature: a palette's role target is a valid reference for a later step, and a note write using it is refused as removed.
         Check: validating a palette, melody and note write reports exactly one blocker, the removal of the note write, so the role target reference itself is accepted.
