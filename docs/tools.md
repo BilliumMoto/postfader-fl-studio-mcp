@@ -175,7 +175,7 @@ Multi-step jobs that PostFader validates and executes in order.
 | --- | --- | --- |
 | `run_describe_operations` | List Production Run operations and return exact schemas for the ones named. | No |
 | `run_validate` | Dry-run a Production Run plan against the live project without changing it. | No |
-| `run_execute` | Run a multi-step production plan, such as writing a chorus, as one task. | **Yes** |
+| `run_execute` | Run a multi-step production plan, such as arranging a section, as one task. | **Yes** |
 | `run_continue` | Resume a stopped or blocked Production Run, or change its unexecuted remainder. | **Yes** |
 | `run_stop` | Stop a run so no further operations execute. | No (local state) |
 | `run_get` | Read a run's status, generated outputs, and per-operation receipts. | No |

@@ -75,7 +75,8 @@ agree with the package version.
 - The planners that change nothing (`plan_sound_palette`,
   `create_sound_palette_variation`, `plan_creation_revision`) still work.
 - `sound_apply_palette` refuses a palette, before any write, if any role being
-  applied would select a preset. In a Production Run, an `apply_sound_palette`
+  applied would select a preset: palettes apply only roles that keep the
+  current preset or reroll Loop Starter. In a Production Run, an `apply_sound_palette`
   operation that carries its palette inline is refused at validation, before
   anything in the run is written. One that applies a palette produced by an
   earlier step of the same run is refused only when it is reached, so earlier
@@ -107,7 +108,10 @@ functions, and the TCP and file transport classes stay in place, unreachable.
    new tool, FL Studio script command, run operation or transport reaches a
    removed feature. Add any new run operation that does to
    `REMOVED_FEATURE_OPERATION_MESSAGES` in `fl_studio_mcp/production_runs.py`;
-   `run_describe_operations` and the run tools' schemas follow it.
+   `run_describe_operations` and the run tools' schemas follow it. If the
+   merge adds a palette `selection_action`, the package refuses to import
+   until `KNOWN_SELECTION_ACTIONS` and `APPLICABLE_SELECTION_ACTIONS` in
+   `fl_studio_mcp/fork_removals.py` are reviewed.
 3. Set the version to `<upstream version>+fork.1` in `pyproject.toml`,
    `fl_studio_mcp/__init__.py`, `server.json` (both places) and
    `manifest.json`.

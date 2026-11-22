@@ -46,9 +46,9 @@ telemetry.
 | 🔎 **Understand a project** | *"Which instruments aren't routed to the mixer?"* | Reads routing, effects, channels, patterns, Playlist tracks, and plug-in parameters. |
 | 🩺 **Fix a mix** | *"What are the three biggest problems in this bounce?"* | Measures loudness, peaks, tonal balance, stereo width, and vocal masking in the files you export, and compares them with a reference. |
 | 🎛️ **Change the session** | *"Pan the backing vocals wider and pull the reverb send down 3 dB."* | Sets faders, pan, sends, routing, names, colors, tempo, transport, and any parameter a loaded plug-in exposes, then reads each one back. |
-| 🎹 **Write music** | *"Add an 8-bar D Dorian bassline under my chords."* | Generates chords, melodies, basslines, and drums and exports MIDI files. This fork does not write to the Piano Roll. |
+| 🎹 **Write music** | *"Write an 8-bar D Dorian bassline to a MIDI file I can drag in."* | Generates chords, melodies, basslines, and drums and exports MIDI files. This fork does not write to the Piano Roll. |
 | 🎚️ **Pick sounds** | *"Choose the sounds yourself from what's loaded."* | Plans which loaded instruments fit each role. This fork does not select presets. |
-| 🧱 **Run a whole task** | *"Turn this loop into a 16-bar draft, but keep my vocal."* | Runs the job as a checked plan you can resume. Export a bounce and it can review the draft and plan one revision. |
+| 🧱 **Run a whole task** | *"Set up patterns and section markers for a 16-bar arrangement, and leave my vocal alone."* | Runs the job as a checked plan you can resume. Export a bounce and it can review the draft and plan one revision. |
 
 Browse all 80 tools in the [tool reference](docs/tools.md).
 

@@ -295,7 +295,7 @@
     },
     {
       "name": "run_execute",
-      "description": "Run a multi-step production plan, such as writing a chorus, as one task."
+      "description": "Run a multi-step production plan, such as arranging a section, as one task."
     },
     {
       "name": "run_continue",

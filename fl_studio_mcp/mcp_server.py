@@ -382,11 +382,11 @@ Sounds: sound_plan_palette then sound_apply_palette (or the palette operations
 inside a run). Apply takes the session_fingerprint from a live read. Keep user
 preferences, exclusions, locked roles and continuity in the request. Plan the
 palette before composing, so parts fit the chosen sounds; pass base_palette_id
-to plan a later section's variation. This build cannot select presets, so sound_apply_palette refuses a
-palette whose roles need one. Atlas supplies offline product knowledge; only a
-live inventory establishes a loaded instrument or effect. Read presets and
-non-GM drum pad maps (plugin_list_presets, plugin_get_pad_map) before
-addressing them. On macOS,
+to plan a later section's variation. This build cannot select presets, so
+sound_apply_palette refuses a palette whose roles need one. Atlas supplies
+offline product knowledge; only a live inventory establishes a loaded
+instrument or effect. Read presets and non-GM drum pad maps
+(plugin_list_presets, plugin_get_pad_map) before addressing them. On macOS,
 plugin_list_available and plugin_load add missing instruments or effects from
 FL's Add menu; match exact menu names and use write mode like any setter.
 
@@ -2927,10 +2927,10 @@ async def run_validate(
     annotations=MUTATING.model_copy(update={"title": "Execute a Production Run"}),
 )
 async def run_execute(request: RunRequestArg, plan: RunPlanArg) -> ProductionRunResult:
-    """Run a multi-step production plan, such as writing a chorus, as one task.
+    """Run a multi-step production plan, such as arranging a section, as one task.
 
     The main path for work that spans several kinds of operation, such as
-    composing, writing notes, arranging, choosing sounds, and processing: it
+    composing, patterns, arranging, choosing sounds, and processing: it
     validates the whole plan, checks readiness, enables write mode once for
     the run, executes operations in order with per-operation receipts, and
     releases write mode when finished. For edits already decided, use the
@@ -3139,7 +3139,8 @@ async def review_plan_revision(
     Read-only: validates that each operation traces to a finding or feedback,
     respects the producer's locks on accepted sound, notes, rhythm, register,
     processing, level, placement, and roles, and stays within the pass limit.
-    Records the plan in the session for review_apply_revision."""
+    Records the plan in the session for review_apply_revision, which in this
+    build refuses a plan that writes notes or selects presets or drum kits."""
     return await _mix(plan_creation_revision, request)
 
 
@@ -3159,8 +3160,10 @@ async def review_apply_revision(
     Production Run. Needs authorized_to_modify=true from a request to revise
     in this task. Runs one readiness preflight, enables write mode for the
     run, applies the plan's operations with receipts, and releases write mode.
-    Stops on a blocker or unknown outcome. Then ask the user for a new export
-    (review_get view=export_request) and compare it with review_compare."""
+    Stops on a blocker or unknown outcome. This build refuses, before any
+    write, a plan that writes notes or selects presets or drum kits. Then ask
+    the user for a new export (review_get view=export_request) and compare it
+    with review_compare."""
     return await _mix(apply_creation_revision, request)
 
 
