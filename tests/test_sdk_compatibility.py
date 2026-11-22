@@ -186,6 +186,31 @@ class MCPCompatibilityTests(unittest.TestCase):
         validator.validate(operation)
         self.assertTrue(list(validator.iter_errors({**operation, "bar_count": 8})))
 
+    def test_removed_transport_setting_reaches_the_client_as_advice(self) -> None:
+        """Tested feature: a tool call made while a removed transport's setting is set returns the advice to unset it, not an opaque error.
+        Check: with FL_BRIDGE_HOST set, session_get_capabilities fails with the unset-and-restart advice; with it unset and a fresh bridge client, as after a restart, the same call returns the normal offline result.
+        Mocks: the process-wide bridge client, reset so each call builds a fresh one; MIDI stays disabled.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        import os
+
+        from fl_studio_mcp import bridge_client
+
+        with (
+            mock.patch.object(bridge_client, "_client", None),
+            mock.patch.object(bridge_client, "MIDI_ENABLED", False),
+        ):
+            with mock.patch.dict(os.environ, {"FL_BRIDGE_HOST": "127.0.0.1"}):
+                with self.assertRaisesRegex(
+                    Exception, "Unset it and restart the MCP server"
+                ):
+                    asyncio.run(mcp.call_tool("session_get_capabilities", {}))
+            os.environ.pop("FL_BRIDGE_HOST", None)
+            bridge_client._client = None
+            result = asyncio.run(mcp.call_tool("session_get_capabilities", {}))
+        connection = result.structured_content["connection"]
+        self.assertFalse(connection["connected"])
+
     def test_every_contract_model_rejects_unknown_fields(self) -> None:
         models = set()
         for info in pkgutil.walk_packages(fl_studio_mcp.__path__, "fl_studio_mcp."):

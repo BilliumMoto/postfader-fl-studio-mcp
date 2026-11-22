@@ -267,41 +267,43 @@ class DoctorEvidenceTests(unittest.TestCase):
 
     def test_removed_transport_setting_is_reported_with_accurate_advice(self):
         """Tested feature: the doctor reports a removed transport's setting as the cause, with advice to unset it, rather than blaming FL Studio.
-        Check: a live probe refused by RemovedTransportSettingsError fails with removed_transport_setting and the unset advice, and following it, the same doctor run with a working probe passes.
-        Mocks: the doctor's live probe and MIDI probe, plus a fake FL user-data folder and FL executable.
+        Check: with FL_BRIDGE_PORT set, the doctor's real live probe fails with removed_transport_setting and the unset advice; after unsetting it and rerunning, that failure is gone and only the offline bridge failure remains.
+        Mocks: the doctor's MIDI port enumeration, a fake FL user-data folder and FL executable, and MIDI kept disabled so the real live probe opens nothing.
         Test would be deprecated if: the fork restores the TCP or file mailbox transport.
         """
-        from fl_studio_mcp.bridge_client import RemovedTransportSettingsError
-
-        def refused_probe():
-            raise RemovedTransportSettingsError("FL_BRIDGE_PORT is set")
+        from fl_studio_mcp import bridge_client
 
         values = {"FL_BRIDGE_MIDI_PORT": "Chosen Port"}
         ports = {"in": ["Chosen Port"], "out": ["Chosen Port"]}
-        evidence = diagnostics.collect_evidence(
-            user_data_dir=self.user_data,
-            platform_name="win32",
-            environ=values,
-            fl_candidates=[self.fl_candidate],
-            midi_probe=lambda: ports,
-            live_probe=refused_probe,
-        )
-        self.assertEqual(evidence["overall"], "fail")
-        failures = {item["code"]: item for item in evidence["failures"]}
-        self.assertIn("removed_transport_setting", failures)
-        self.assertNotIn("live_bridge_unavailable", failures)
-        self.assertIn("Unset FL_BRIDGE_HOST", failures["removed_transport_setting"]["action"])
-        self.assertNotIn("Start FL Studio", failures["removed_transport_setting"]["action"])
 
-        evidence = diagnostics.collect_evidence(
-            user_data_dir=self.user_data,
-            platform_name="win32",
-            environ=values,
-            fl_candidates=[self.fl_candidate],
-            midi_probe=lambda: ports,
-            live_probe=self.live_value,
-        )
-        self.assertEqual(evidence["overall"], "pass")
+        def run_doctor():
+            return diagnostics.collect_evidence(
+                user_data_dir=self.user_data,
+                platform_name="win32",
+                environ=values,
+                fl_candidates=[self.fl_candidate],
+                midi_probe=lambda: ports,
+            )
+
+        with (
+            mock.patch.object(bridge_client, "MIDI_ENABLED", False),
+            mock.patch.dict(os.environ, {"FL_BRIDGE_ENABLE_MIDI": "0"}),
+        ):
+            with mock.patch.dict(os.environ, {"FL_BRIDGE_PORT": "20202"}):
+                refused = run_doctor()
+            os.environ.pop("FL_BRIDGE_PORT", None)
+            rerun = run_doctor()
+
+        failures = {item["code"]: item for item in refused["failures"]}
+        self.assertEqual(refused["overall"], "fail")
+        self.assertIn("removed_transport_setting", failures)
+        self.assertIn("FL_BRIDGE_PORT", failures["removed_transport_setting"]["message"])
+        self.assertIn("Unset FL_BRIDGE_HOST", failures["removed_transport_setting"]["action"])
+        self.assertNotIn("live_bridge_unavailable", failures)
+
+        rerun_codes = {item["code"] for item in rerun["failures"]}
+        self.assertNotIn("removed_transport_setting", rerun_codes)
+        self.assertEqual(rerun_codes, {"live_bridge_unavailable"})
 
     def test_custom_absolute_executable_is_reported_as_explicit(self):
         custom = Path(self.tmp.name) / "Custom Image-Line" / "FL64.exe"

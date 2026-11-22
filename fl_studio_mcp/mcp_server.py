@@ -26,7 +26,7 @@ from .advisory import (
     analyze_audio_file,
     find_recent_audio_files,
 )
-from .bridge_client import BridgeCommandError
+from .bridge_client import BridgeCommandError, RemovedTransportSettingsError
 from .contracts import (
     CapabilitiesReport,
     MixerTrackInspection,
@@ -71,6 +71,7 @@ from .creation_review.models import (
     RevisionPass,
     RevisionPlan,
 )
+from .fork_removals import FeatureRemovedError
 from .creative import (
     ArrangementMarkerReceipt,
     AutomationRecordReceipt,
@@ -552,6 +553,8 @@ async def _run_with_refusals(invoke):
     except (
         BridgeCommandError,
         EditRefusal,
+        FeatureRemovedError,
+        RemovedTransportSettingsError,
         IncompatibleFLStudio,
         ReadOnlyViolation,
         SoundSelectionAuthorizationError,
@@ -3139,8 +3142,10 @@ async def review_plan_revision(
     Read-only: validates that each operation traces to a finding or feedback,
     respects the producer's locks on accepted sound, notes, rhythm, register,
     processing, level, placement, and roles, and stays within the pass limit.
-    Records the plan in the session for review_apply_revision, which in this
-    build refuses a plan that writes notes or selects presets or drum kits."""
+    Records the plan in the session for review_apply_revision. This build
+    refuses, without recording anything, operations that rewrite notes or
+    change a sound assignment or drum kit, since those need Piano Roll writes
+    or preset selection."""
     return await _mix(plan_creation_revision, request)
 
 
@@ -3160,8 +3165,9 @@ async def review_apply_revision(
     Production Run. Needs authorized_to_modify=true from a request to revise
     in this task. Runs one readiness preflight, enables write mode for the
     run, applies the plan's operations with receipts, and releases write mode.
-    Stops on a blocker or unknown outcome. This build refuses, before any
-    write, a plan that writes notes or selects presets or drum kits. Then ask
+    Stops on a blocker or unknown outcome. This build refuses a plan that
+    rewrites notes or changes a sound assignment or drum kit before any write
+    and without recording a revision pass. Then ask
     the user for a new export (review_get view=export_request) and compare it
     with review_compare."""
     return await _mix(apply_creation_revision, request)
