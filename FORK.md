@@ -7,8 +7,8 @@ FL Studio MCP server under the Apache License 2.0. Its version is
 
 This fork removes Piano Roll script generation, plug-in preset selection, and
 the TCP and file transports, so the live bridge between the server and
-FL Studio uses only MIDI. Everything else is unchanged except the refusals
-listed below. The fork has 80 tools; upstream 12.0.3 has 85.
+FL Studio uses only MIDI. Everything else is unchanged except the refusals and
+other changes listed below. The fork has 80 tools; upstream 12.0.3 has 85.
 
 The fork is not published to PyPI or the MCP Registry. `server.json` keeps
 upstream's registry name only because the package tests require that file to
@@ -69,9 +69,23 @@ agree with the package version.
   A creation revision may produce note writes or preset or drum-kit
   selections, so the fork refuses `apply_creation_revision` inside a
   Production Run; `review_apply_revision` applies revisions that contain none
-  of them, and refuses, at the same validation, a revision that does.
-- `run_describe_operations` lists those five operations as unavailable, with
-  the reason for each, and the run tools' schemas no longer offer them.
+  of them.
+- Validation looks at every operation in a plan, including ones already
+  completed, so a run journaled by an upstream build whose plan contains one
+  of those operations cannot be continued by this build.
+- Creation Review refuses the revision operations that would need them:
+  `transform_generated_sequence`, `create_section_note_variation` and the
+  `change_section_*` operations, which rewrite notes, and
+  `change_sound_assignment` and `change_drum_kit`, which select a preset or
+  drum kit (`REMOVED_REVISION_OPERATION_MESSAGES` in
+  `fl_studio_mcp/creation_review/revision_planner.py`). `review_plan_revision`
+  refuses them without recording a plan, and `review_apply_revision` refuses
+  a recorded plan holding one before recording a revision pass, so a refused
+  revision never uses up the session's revision passes. The arrangement
+  finding no longer suggests `create_section_note_variation`.
+- `run_describe_operations` lists the five run operations as unavailable,
+  and `unavailable_reasons` in its result gives the reason for every
+  unavailable operation. The run tools' schemas no longer offer the five.
 - The planners that change nothing (`plan_sound_palette`,
   `create_sound_palette_variation`, `plan_creation_revision`) still work.
 - `sound_apply_palette` refuses a palette, before any write, if any role being
@@ -85,6 +99,16 @@ agree with the package version.
 
 ### Other
 
+- `scripts/generate_mcp_config.py` and `fl_studio_mcp/client_config.py`
+  default to the `midi` transport and refuse `automatic`, which in this build
+  would produce a configuration that can never connect. `postfader setup`
+  already writes MIDI configurations.
+- When `FL_BRIDGE_HOST`, `FL_BRIDGE_PORT` or `FL_BRIDGE_MAILBOX` is set, tools
+  return the advice to unset it and restart the MCP server, and the doctor
+  reports `removed_transport_setting` with the same advice.
+- The FL Studio script answers a command it has no handler for, including the
+  removed ones, as an unknown command before its read-only lock check, so the
+  reply never suggests that write mode would allow it.
 - The MIDI port probe's child Python starts with `CREATE_NO_WINDOW` on
   Windows, so it cannot open a console window.
 - `manifest.json` and `docs/tools.md` are regenerated; the other documents

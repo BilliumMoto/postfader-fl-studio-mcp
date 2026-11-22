@@ -51,7 +51,11 @@ from .persistence import (
     ReviewSessionCorruptionError,
     ReviewSessionWriteError,
 )
-from .revision_planner import compile_revision_plan, revision_request_digest
+from .revision_planner import (
+    compile_revision_plan,
+    refuse_removed_revision_operations,
+    revision_request_digest,
+)
 from .sections import build_review_section_map
 from .sessions import ReviewSessionRegistry
 
@@ -745,6 +749,8 @@ def review_plan_revision(request: ReviewPlanRevisionRequest) -> RevisionPlan:
             if receipt.status != "planned"
         }
     )
+    # Refuse, before anything is recorded, a revision this fork cannot apply.
+    refuse_removed_revision_operations(request.operations)
     source_palette_digest = _palette_digest(session)
     processing_plans = _processing_plans(session)
     effect_controls = _effect_controls(processing_plans)
@@ -817,6 +823,10 @@ def _apply_revision(request: ReviewApplyRevisionRequest) -> RevisionPass:
     )
     if plan is None:
         raise ValueError("revision plan is not recorded in this Review Session")
+    # A plan recorded by an upstream build may still hold an operation this
+    # fork cannot apply. Refuse it before the session changes state or a
+    # revision pass is recorded, so no pass is spent on it.
+    refuse_removed_revision_operations(plan.operations)
     if request.request.source_run_id != session.source_run_id:
         raise ValueError("revision request belongs to a different source run")
     if request.request.source_evaluation_id != plan.source_evaluation_id:
