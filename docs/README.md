@@ -21,8 +21,8 @@ MCP clients read and edit the FL Studio project you have open. Start with the
 | [Production Runs](production-runs.md) | Multi-step jobs: planning, running, resuming, and stopping |
 | [Creation pipeline](creation-pipeline.md) | Readiness checks, sound-aware composition, and processing inside a run |
 | [Creation Review](creation-review.md) | Reviewing a draft bounce, planning one revision, comparing, and delivery |
-| [Sound Selection](sound-selection.md) | Choosing presets from the instruments already loaded |
-| [Plug-in support](plugin-support.md) | Reading and setting plug-in parameters, presets, and compatibility reports |
+| [Sound Selection](sound-selection.md) | Planning sounds from the instruments already loaded (this fork does not select presets) |
+| [Plug-in support](plugin-support.md) | Reading plug-in presets, setting parameters, and compatibility reports |
 | [Plugin Atlas](plugin-atlas.md) | Offline knowledge about Image-Line and selected third-party plug-ins |
 
 ## Reference

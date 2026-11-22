@@ -33,7 +33,7 @@ confirmation.
 | --- | --- |
 | Change several fields of one target | `mixer_set_track`, `channel_set`, `pattern_set`, `playlist_set_track`, or `transport_set`; one call, writes in a fixed order, each with its own later-tick receipt. |
 | Set a plug-in parameter | `plugin_set_parameter` with exactly one value: `display_value` (Hz, dB, ms, or another displayed number, optional `unit`) searches displayed values instead of assuming a normalized curve; `option` selects a named option but moves the control during discovery, so it is not a read-only option listing; `normalized_value` writes a known 0–1 value to an inspected parameter index. |
-| Select a whole preset | `plugin_select_preset`; use exact names/indices from `plugin_list_presets`. |
+| Select a whole preset | Not available in this fork; `plugin_list_presets` reads a plug-in's presets. |
 | Apply already-reviewed writes across targets | `project_apply_edits`; ordered and non-atomic, with per-operation receipts. |
 | Apply a planner's result | Each planner has its own apply tool, which takes only that planner's output: `processing_plan` → `processing_apply`, `sound_plan_palette` → `sound_apply_palette`, `review_plan_revision` → `review_apply_revision`. Values already decided go to a setter or `project_apply_edits`. |
 | Review a plan before anything changes | `run_validate` → `run_execute`; validation mutates nothing, and execution runs the plan (direct edits go in an `apply_verified_batch` operation) as one task-scoped Production Run with retained receipts. |
