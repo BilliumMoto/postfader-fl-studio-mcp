@@ -145,8 +145,8 @@ ownership lock or endpoint open.
 ### Piano Roll scripting (removed in this fork)
 
 This fork of PostFader removed Piano Roll scripting. It writes no Postfader
-Apply script, sends no keyboard shortcut to FL Studio, and has no tool that
-reads or writes Piano Roll notes. See [FORK.md](../FORK.md).
+Apply script, never sends FL Studio the Piano Roll run-script shortcut, and has
+no tool that reads or writes Piano Roll notes. See [FORK.md](../FORK.md).
 
 ### Armed-ready creation fixtures
 

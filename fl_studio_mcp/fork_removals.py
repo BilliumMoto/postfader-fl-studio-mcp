@@ -21,9 +21,9 @@ class FeatureRemovedError(RuntimeError):
 
 
 PIANO_ROLL_REMOVED = (
-    "Piano Roll scripting is removed in this fork of PostFader: it does not "
-    "write Piano Roll scripts, send keyboard shortcuts to FL Studio, or read "
-    "or write Piano Roll notes."
+    "Piano Roll scripting is removed in this fork of PostFader: it writes no "
+    "Piano Roll scripts, sends no Piano Roll run-script shortcut, and cannot "
+    "read or write Piano Roll notes."
 )
 
 PRESET_SELECTION_REMOVED = (

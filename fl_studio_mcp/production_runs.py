@@ -1661,9 +1661,10 @@ REMOVED_FEATURE_OPERATION_MESSAGES: dict[str, str] = {
         "This run is blocked because transform_piano_roll changes notes "
         "through FL's Piano Roll. " + PIANO_ROLL_REMOVED
     ),
-    # The alternative this message names, review_apply_revision, is followed
-    # by tests in tests/test_creation_review_mcp.py that apply a revision
-    # through it.
+    # The alternative this message names, review_apply_revision, stands in for
+    # a recovery step. No new test follows it: the existing
+    # review_apply_revision tests in tests/test_creation_review_mcp.py, which
+    # apply revisions through it, serve as that test.
     "apply_creation_revision": (
         "This run is blocked because a creation revision may produce Piano "
         "Roll note writes or preset or drum-kit selections, which this fork "

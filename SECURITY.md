@@ -202,8 +202,11 @@ paths in prompts.
 Creative file tools can also write caller-selected Type-1 MIDI paths. Existing
 files are refused unless the request explicitly sets `overwrite=true`; the
 result is reopened and parsed before success is reported. This fork removed
-Piano Roll scripting: it writes no `Postfader_Apply.pyscript`, and never
-focuses the FL Studio window or sends it a keyboard shortcut.
+Piano Roll scripting: it writes no `Postfader_Apply.pyscript` and never sends
+FL Studio the Piano Roll run-script shortcut. Other tools are unchanged: on
+macOS, `plugin_list_available` and `plugin_load` still drive FL Studio's menus
+through System Events, which focuses FL Studio and sends it keystrokes (see
+[FORK.md](FORK.md)).
 
 ## Security invariants
 
