@@ -13,8 +13,12 @@ Design constraints this file works within:
 
 * FL sandboxes the script interpreter. Sockets and every filesystem write
   fail by returning NULL with no exception set, so the transport that works
-  in practice is MIDI SysEx through FL's own `device` module. TCP and a file
-  mailbox are tried first, for hosts where they do work.
+  in practice is MIDI SysEx through FL's own `device` module. This fork of
+  the bridge starts only that transport; the TCP and file mailbox classes
+  remain below for deterministic tests but are never started.
+* This fork also removed Piano Roll targeting and plug-in preset selection:
+  their commands are in no command list and not in HANDLERS, so the bridge
+  refuses them like any unknown command.
 * Every FL API call must happen on FL Studio's own thread. FL calls `OnIdle`
   roughly every 20 ms, so all I/O is polled there and nothing touches the API
   from a background thread.
@@ -274,14 +278,13 @@ READ_ONLY_COMMANDS = frozenset({
     "patterns.list",
     "patterns.find_empty",
     "playlist.list",
-    "creative.piano_roll_target",
 })
 SESSION_CONTROL_COMMANDS = frozenset({
     "session.set_write_mode",
 })
-NAVIGATION_COMMANDS = frozenset({
-    "creative.prepare_piano_roll",
-})
+# Editor navigation that is allowed while project edits are locked. Its only
+# command, creative.prepare_piano_roll, was removed with Piano Roll support.
+NAVIGATION_COMMANDS = frozenset()
 LEAN_WRITE_COMMANDS = frozenset({
     "mixer.set_volume",
     "mixer.set_volume_db",
@@ -299,7 +302,6 @@ LEAN_WRITE_COMMANDS = frozenset({
     "plugin.set_param",
     "plugin.set_param_display",
     "plugin.set_param_option",
-    "plugin.select_preset",
     "transport.set_playing",
     "transport.stop",
     "transport.set_song_position",
@@ -720,7 +722,6 @@ def cmd_ping(a):
         MIDI_WIRE_PROTOCOL_FIELD: MIDI_WIRE_PROTOCOL_VERSION,
         "verified_writes_enabled": bool(LEAN_WRITES_ENABLED),
         "runtime_write_mode_control": True,
-        "piano_roll_navigation": True,
         "plugin_display_units": True,
         "project_load_epoch": True,
         "project_loading": bool(_project_loading),
@@ -1696,6 +1697,7 @@ def _preset_expected_current(a):
     return name, index
 
 
+# Unreachable in this fork, which removed preset selection: not in HANDLERS.
 def cmd_plugin_select_preset(a):
     """Select one exact preset using a bounded later-tick navigation loop."""
     allowed = {
@@ -5488,6 +5490,8 @@ def _arrangement_marker_names():
     return names
 
 
+# The two Piano Roll handlers below are unreachable in this fork, which
+# removed Piano Roll support: neither is in HANDLERS.
 def cmd_creative_piano_roll_target(a):
     """Observe the current editor target without changing selection or notes."""
     if a:
@@ -5823,6 +5827,9 @@ def cmd_automation_record_value(a):
     }
 
 
+# This fork leaves out plugin.select_preset, creative.prepare_piano_roll and
+# creative.piano_roll_target. Their handlers stay defined above, unreachable,
+# so upstream changes to them still merge.
 HANDLERS = {
     "ping": cmd_ping,
     "session.set_write_mode": cmd_session_set_write_mode,
@@ -5866,7 +5873,6 @@ HANDLERS = {
     "plugin.presets": cmd_plugin_presets,
     "plugin.current_preset": cmd_plugin_current_preset,
     "plugin.pad_map": cmd_plugin_pad_map,
-    "plugin.select_preset": cmd_plugin_select_preset,
     "plugin.scan_params": cmd_plugin_scan_params,
     "channels.list": cmd_channels_list,
     "patterns.list": cmd_patterns_list,
@@ -5887,8 +5893,6 @@ HANDLERS = {
     "sequencer.set": cmd_sequencer_set,
     "channel.trigger_note": cmd_channel_trigger_note,
     "channels.rerollLoopStarterLoop": cmd_channels_reroll_loop_starter_loop,
-    "creative.prepare_piano_roll": cmd_creative_prepare_piano_roll,
-    "creative.piano_roll_target": cmd_creative_piano_roll_target,
     "arrangement.add_markers": cmd_arrangement_add_markers,
     "automation.record_value": cmd_automation_record_value,
 }
@@ -6082,8 +6086,9 @@ def _queue(handle, resp):
 #
 # Re-importing does not help, because the cache is keyed per process rather
 # than per interpreter. In the validated FL host, plain file writes are also
-# blocked, so MIDI SysEx is the production transport. TCP and the file mailbox
-# remain useful fallbacks for hosts and deterministic tests where they work.
+# blocked, so MIDI SysEx is the production transport. This fork starts only
+# MIDI (see _start_server); the TCP and file mailbox classes stay for
+# deterministic tests.
 
 
 class _SocketTransport:
@@ -6598,20 +6603,18 @@ class _MidiTransport:
 
 
 def _start_server():
-    """Bring up the best transport that works in this interpreter."""
+    """Bring up the MIDI SysEx transport, the only one this fork starts."""
     global _transport
-    for transport in (_SocketTransport(), _FileTransport(),
-                      _MidiTransport()):
-        try:
-            detail = transport.start()
-        except Exception as e:
-            _log("%s transport unavailable - %s" % (transport.name, e))
-            continue
-        _transport = transport
-        _log("ready: %s (%s transport)" % (detail, transport.name))
+    transport = _MidiTransport()
+    try:
+        detail = transport.start()
+    except Exception as e:
+        _log("%s transport unavailable - %s" % (transport.name, e))
+        _transport = _NullTransport()
+        _log("FAILED: no usable transport. The MCP server cannot reach FL Studio.")
         return
-    _transport = _NullTransport()
-    _log("FAILED: no usable transport. The MCP server cannot reach FL Studio.")
+    _transport = transport
+    _log("ready: %s (%s transport)" % (detail, transport.name))
 
 
 class _NullTransport:

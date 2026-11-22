@@ -36,6 +36,7 @@ from .contracts import (
     SelectedRangeObservation,
     TransportState,
 )
+from .fork_removals import PIANO_ROLL_REMOVED
 from .track_b_contracts import normalize_fl_color
 
 
@@ -754,16 +755,11 @@ class ReadOnlyInspector:
             ),
             CapabilityRecord(
                 capability="piano_roll_note_snapshot",
-                status=CapabilityStatus.UNVALIDATED,
-                access_path="piano_roll_read_notes through the Piano Roll script runtime",
-                limitations=[
-                    "Requires one-time script setup and the bridge editor-navigation capability.",
-                    "Opens the requested editor; does not change notes or enable musical writes.",
-                    "Each bounded page must return its own script receipt and matching target observation.",
-                ],
+                status=CapabilityStatus.UNAVAILABLE,
+                limitations=[PIANO_ROLL_REMOVED],
                 evidence=[CapabilityEvidence(
                     kind=fixture,
-                    detail="Generated note snapshots and page/target handling pass synthetic tests; no live snapshot is claimed here.",
+                    detail="This build registers no Piano Roll tool, and its bridge rejects the Piano Roll commands.",
                 )],
             ),
             CapabilityRecord(

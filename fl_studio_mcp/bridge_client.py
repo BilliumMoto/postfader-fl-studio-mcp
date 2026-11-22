@@ -1,15 +1,16 @@
 """Client for the Universal Bridge script running inside FL Studio.
 
-Three transports, tried in order:
+This fork of PostFader reaches FL Studio only over MIDI SysEx, which is what
+works with FL Studio: it sandboxes its script interpreter so that both
+sockets and filesystem writes fail. ``BridgeClient`` builds no other
+transport. The loopback TCP and file mailbox transport classes stay in this
+module, so upstream changes to them still merge, and tests use the TCP one as
+a deterministic link to a fake FL; nothing in the package constructs them.
 
-* TCP on loopback - fastest, used wherever it works.
-* A file mailbox - for hosts that allow writes but not sockets.
-* MIDI SysEx - what actually works with FL Studio, which sandboxes its script
-  interpreter so that both sockets and filesystem writes fail.
-
-All three speak the same JSON command/result protocol, so nothing above this
-module needs to know which one is carrying the traffic. MIDI separately
-negotiates its framing version because native backends impose wire-size limits.
+Every transport speaks the same JSON command/result protocol, so nothing
+above this module needs to know which one is carrying the traffic. MIDI
+separately negotiates its framing version because native backends impose
+wire-size limits.
 """
 
 from __future__ import annotations
@@ -44,8 +45,6 @@ try:
 except ImportError:  # pragma: no cover - available in supported Windows Python.
     msvcrt = None
 
-HOST = os.environ.get("FL_BRIDGE_HOST", "127.0.0.1")
-PORT = int(os.environ.get("FL_BRIDGE_PORT", "20202"))
 TIMEOUT = float(os.environ.get("FL_BRIDGE_TIMEOUT", "30"))
 PREFIX = "clbr-"
 REQ_PREFIX = PREFIX + "req-"
@@ -178,20 +177,23 @@ IDEMPOTENT_READ_COMMANDS = frozenset({
     "patterns.list",
     "patterns.find_empty",
     "playlist.list",
-    "creative.piano_roll_target",
 })
 MAX_IDEMPOTENT_READ_RECONNECTS = 1
 RECONNECT_DELAY_SECONDS = 0.05
 
+# No test can follow these steps: each needs FL Studio running and a real
+# virtual MIDI port, which the offline suite never opens.
 NOT_CONNECTED_HELP = (
     "Could not reach the Universal Bridge inside FL Studio.\n"
-    "Tried TCP {host}:{port}, mailboxes under {mailbox}.\n"
+    "This build reaches FL Studio only over MIDI SysEx.\n"
     "{midi_line}\n"
     "Check, in order:\n"
     "  1. FL Studio is running.\n"
-    "  2. Options > MIDI settings > Input: the port carrying the bridge is\n"
-    "     enabled and its Controller type is 'Universal Bridge'.\n"
-    "  3. View > Script output shows '[UniversalBridge] ready: ...'.\n"
+    "  2. This process has FL_BRIDGE_ENABLE_MIDI=1 and FL_BRIDGE_MIDI_PORT\n"
+    "     naming the virtual MIDI port the bridge uses.\n"
+    "  3. Options > MIDI settings > Input: that port is enabled and its\n"
+    "     Controller type is 'Universal Bridge'.\n"
+    "  4. View > Script output shows '[UniversalBridge] ready: ...'.\n"
     "     Use the 'Reload script' button there after changing the script."
 )
 
@@ -488,6 +490,9 @@ def _midi_preflight(port_name: str) -> bool:
             capture_output=True,
             text=True,
             timeout=8,
+            # The probe child is a console program; on Windows, keep it from
+            # opening a console window of its own.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if probe.returncode != 0:
             found = False
@@ -1116,16 +1121,16 @@ class _MidiTransport:
 
 
 class BridgeClient:
-    """Serialised access to the bridge; picks whichever transport is live."""
+    """Serialised access to the bridge over its MIDI SysEx transport.
 
-    def __init__(self, host=HOST, port=PORT, timeout=TIMEOUT,
-                 mailbox=None, midi_port=MIDI_PORT):
+    This fork builds only the MIDI transport. Without FL_BRIDGE_ENABLE_MIDI=1
+    the client has no transport, and every call raises
+    ``BridgeUnavailableError`` with ``NOT_CONNECTED_HELP``.
+    """
+
+    def __init__(self, timeout=TIMEOUT, midi_port=MIDI_PORT):
         self.timeout = timeout
-        roots = [mailbox] if mailbox else MAILBOX_CANDIDATES
-        self._transports = [
-            _TcpTransport(host, port, timeout),
-            _FileTransport(roots, timeout),
-        ]
+        self._transports = []
         # FL_BRIDGE_ENABLE_MIDI gates the transport itself, not merely the
         # preflight probe. Opening native MIDI is the one transport that can take
         # a shared system resource -- and abort the interpreter from native
@@ -1151,8 +1156,6 @@ class BridgeClient:
         self._id = int(self._client_session[:8], 16) % MAX_WIRE_ID
         self._request_sequence = 0
         self._lock = threading.Lock()
-        self.host, self.port = host, port
-        self.mailbox = mailbox or ", ".join(roots)
         self.midi_port = midi_port
 
     @property
@@ -1174,12 +1177,11 @@ class BridgeClient:
             # actually in their own configuration.
             midi_line = (
                 "MIDI SysEx was not tried: FL_BRIDGE_ENABLE_MIDI is not set "
-                "to 1 for this process. That is the transport FL Studio "
-                "actually uses, so set it (see .mcp.json.example)."
+                "to 1 for this process."
             )
-        raise BridgeUnavailableError(NOT_CONNECTED_HELP.format(
-            host=self.host, port=self.port, mailbox=self.mailbox,
-            midi_line=midi_line))
+        raise BridgeUnavailableError(
+            NOT_CONNECTED_HELP.format(midi_line=midi_line)
+        )
 
     def call(self, cmd: str, **args) -> dict:
         with self._lock:

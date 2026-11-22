@@ -102,6 +102,9 @@ def _native_midi_probe() -> Mapping[str, Sequence[object]]:
         text=True,
         timeout=10,
         check=False,
+        # The probe child is a console program; on Windows, keep it from
+        # opening a console window of its own.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip().splitlines()

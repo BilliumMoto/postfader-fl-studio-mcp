@@ -72,17 +72,12 @@ from .creation_review.models import (
     RevisionPlan,
 )
 from .creative import (
-    PIANO_ROLL,
     ArrangementMarkerReceipt,
     AutomationRecordReceipt,
-    CreativeNote,
     MidiExportReceipt,
     MidiTrackSpec,
     NoteSequence,
     PatternPreparation,
-    PianoRollBridgeStatus,
-    PianoRollDispatch,
-    PianoRollTransform,
     SectionMarker,
     add_section_markers,
     compose_bassline as generate_bassline,
@@ -92,8 +87,6 @@ from .creative import (
     export_type1_midi,
     prepare_empty_pattern,
     record_automation_value,
-    transform_piano_roll,
-    write_piano_roll_notes,
 )
 from .edits import (
     EditRefusal,
@@ -122,7 +115,6 @@ from .music_analysis import (
     analyze_tempo_and_key,
     transcribe_monophonic,
 )
-from .piano_roll import PianoRollNoteSnapshot, read_piano_roll_notes
 from .plugin_loading import (
     PluginLoadRequest, PluginLoadResult, PluginMenuInventory,
     list_available_plugins, load_plugin,
@@ -213,7 +205,6 @@ from .track_b_contracts import (
     ChannelList,
     ExpectedChannelTargetState,
     ExpectedPluginParameterState,
-    ExpectedPluginPresetState,
     ExpectedProjectHistoryState,
     LiveNoteDispatch,
     MAX_VERIFIED_STEP_COUNT,
@@ -229,7 +220,6 @@ from .track_b_contracts import (
     StepSequenceObservation,
     TargetedLoadedPluginInventory,
     TargetedPluginParameterScan,
-    VerifiedPluginPresetSelection,
     VerifiedProjectHistoryMove,
     VerifiedStepSequenceWrite,
     VerifiedTargetedPluginDisplayWrite,
@@ -392,16 +382,16 @@ Sounds: sound_plan_palette then sound_apply_palette (or the palette operations
 inside a run). Apply takes the session_fingerprint from a live read. Keep user
 preferences, exclusions, locked roles and continuity in the request. Select the
 palette before writing notes; pass base_palette_id to plan a later section's
-variation. Atlas supplies offline product knowledge; only a live inventory
-establishes a loaded instrument or effect. Read presets and non-GM drum pad maps
-(plugin_list_presets, plugin_get_pad_map) before addressing them. On macOS,
+variation. This build cannot select presets, so sound_apply_palette refuses a
+palette whose roles need one. Atlas supplies offline product knowledge; only a
+live inventory establishes a loaded instrument or effect. Read presets and
+non-GM drum pad maps (plugin_list_presets, plugin_get_pad_map) before
+addressing them. On macOS,
 plugin_list_available and plugin_load add missing instruments or effects from
 FL's Add menu; match exact menu names and use write mode like any setter.
 
-Notes: piano_roll_read_notes inspects existing notes before composing around
-them. compose_* tools generate parts offline; compose_export_midi writes a
-checked Type-1 MIDI file. Piano Roll writing needs one setup: piano_roll_setup
-action=prepare, the user runs Postfader Apply once in FL, then action=confirm.
+Notes: compose_* tools generate parts offline; compose_export_midi writes a
+checked Type-1 MIDI file. This build cannot read or write Piano Roll notes.
 Missing receipts mean an unknown outcome, not permission to retry. Step edits
 use the latest digest from channel_get_steps.
 
@@ -1306,8 +1296,8 @@ async def channel_list() -> ChannelList:
     Read-only. Each channel has a global channel_index, name, color, volume,
     pan, pitch, mute/solo/selection, mixer destination, generator identity, and
     a channel_fingerprint. Use the index for channel_set, channel_get_steps,
-    piano_roll tools, and channel_generator plug-in targets; pass the
-    fingerprint as channel_set's expected_before guard."""
+    and channel_generator plug-in targets; pass the fingerprint as
+    channel_set's expected_before guard."""
     return await _performance_read("list_channels")
 
 
@@ -1361,8 +1351,8 @@ async def channel_set(
     (session_set_write_mode). Writes run in that order, each read back on a
     later FL tick with its own receipt; verified is true only when every write
     verified. Non-atomic: earlier writes remain if a later one fails. Use
-    plugin_set_parameter for the channel's instrument, channel_set_steps for
-    its step grid, and piano_roll_write_notes for its notes. Does not save."""
+    plugin_set_parameter for the channel's instrument and channel_set_steps
+    for its step grid. Does not save."""
     return await _edit(
         set_channel,
         channel_index=channel_index,
@@ -1431,8 +1421,8 @@ async def channel_set_steps(
 
     Requires write mode and a fresh channel_get_steps read: the edit refuses if
     the grid no longer matches expected_digest, so nothing is overwritten
-    blindly. Each changed cell is read back on a later tick and reported. Use
-    piano_roll_write_notes for pitched notes and lengths. Does not save."""
+    blindly. Each changed cell is read back on a later tick and reported.
+    Does not save."""
     return await _performance_write(
         "set_step_sequence", pattern_number=pattern_number,
         channel_index=channel_index, expected_digest=expected_digest,
@@ -1464,8 +1454,7 @@ async def channel_play_note(
 
     Sends a bounded note-on/note-off pair; nothing is recorded or saved and
     the project is unchanged. Requires write mode. The receipt confirms the
-    dispatch only: FL has no getter for what was heard. To add notes to the
-    project, use piano_roll_write_notes."""
+    dispatch only: FL has no getter for what was heard."""
     return await _performance_write(
         "trigger_note", channel_index=channel_index, note=note, velocity=velocity,
         duration_ms=duration_ms, midi_channel=midi_channel,
@@ -1492,8 +1481,8 @@ async def pattern_list() -> PatternList:
     """List the project's patterns with name, color, length, and which is current.
 
     Read-only. Also reports whether each pattern is FL's default empty pattern.
-    Use pattern numbers with pattern_set, channel_get_steps, and the piano_roll
-    tools; use pattern_create to make a new named pattern."""
+    Use pattern numbers with pattern_set and channel_get_steps; use
+    pattern_create to make a new named pattern."""
     return await _performance_read("list_patterns")
 
 
@@ -1908,9 +1897,9 @@ async def plugin_list_presets(
 
     Read-only. Returns FL's authoritative preset_count, one page of names with
     their indices (follow next_start for more), and, unless include_current is
-    false, the current preset with an index only when it is unique. Use a name
-    or index from this list with plugin_select_preset; use sound_plan_palette
-    to choose sounds across several roles."""
+    false, the current preset with an index only when it is unique. This
+    build cannot select presets; use sound_plan_palette to compare sounds
+    across several roles."""
     return await _performance_read(
         "list_plugin_presets",
         target=target,
@@ -1918,59 +1907,6 @@ async def plugin_list_presets(
         limit=limit,
         include_current=include_current,
         include_empty_names=include_empty_names,
-    )
-
-
-@mcp.tool(
-    name="plugin_select_preset",
-    annotations=MUTATING.model_copy(update={"title": "Select a plug-in preset"}),
-)
-async def plugin_select_preset(
-    target: PluginTargetArg,
-    preset_name: Annotated[
-        str | None,
-        Field(default=None, min_length=1, max_length=256, description="Exact preset name from plugin_list_presets."),
-    ] = None,
-    preset_index: Annotated[
-        int | None,
-        Field(default=None, ge=0, le=999_999, description="Exact preset index from plugin_list_presets."),
-    ] = None,
-    expected_current: Annotated[
-        ExpectedPluginPresetState | None,
-        Field(default=None, description="Optional current preset name and/or index; refuse if it changed."),
-    ] = None,
-    session_fingerprint: SessionFingerprintArg = None,
-    target_fingerprint: Annotated[
-        str | None,
-        Field(default=None, pattern=r"^[0-9a-f]{64}$", description="Optional target identity from plugin_list_presets; refuse if a different plug-in is now loaded there."),
-    ] = None,
-    max_navigation_steps: Annotated[
-        int,
-        Field(default=64, ge=0, le=256, description="Bound on next/previous preset steps."),
-    ] = 64,
-    settle_tick_limit: Annotated[
-        int,
-        Field(default=1, ge=1, le=8, description="Later FL ticks allowed for the plug-in to settle."),
-    ] = 1,
-) -> VerifiedPluginPresetSelection:
-    """Load a known preset on one mixer effect or Channel Rack instrument.
-
-    Supply an exact name and/or index from plugin_list_presets. Requires write
-    mode. FL steps through presets to reach the target, which changes the sound
-    through intermediate presets, bounded by max_navigation_steps; the landed
-    preset's identity is read back. Inspect verified and warnings. Use
-    sound_apply_palette for planned multi-role choices. This selects a preset;
-    it does not set a parameter or load a new plug-in (plugin_load)."""
-    return await _performance_write(
-        "select_plugin_preset",
-        target=target,
-        preset_name=preset_name,
-        preset_index=preset_index,
-        expected_current=expected_current,
-        session_fingerprint=session_fingerprint,
-        target_fingerprint=target_fingerprint,
-        max_navigation_steps=max_navigation_steps,
-        settle_tick_limit=settle_tick_limit,
     )
 
 
@@ -2016,7 +1952,7 @@ async def plugin_load(
 
     Use an exact name from plugin_list_available. Requires write mode; an
     effect load first selects its mixer track. Returns the new channel or
-    effect slot as a target for plugin_select_preset or plugin_set_parameter.
+    effect slot as a target for plugin_set_parameter.
     If the outcome is unknown, inspect plugin_list_loaded before trying again.
     Windows insertion is not implemented. Does not save the project."""
     return await _mix(load_plugin, request)
@@ -2383,15 +2319,15 @@ async def sound_apply_palette(
         Field(default=None, description="Override the palette's local-history policy for this application."),
     ] = None,
 ) -> SoundSelectionApplyResult:
-    """Apply the palette returned by sound_plan_palette, loading each role's preset.
+    """Apply the palette returned by sound_plan_palette.
 
     Pass the palette (or its palette_id) unchanged, the session_fingerprint
-    from a live read, and authorized_to_modify=true. Enables write mode for
-    this application, selects each assignment's preset in a fixed order with
-    later-tick identity readback, and stops on an unknown or unverified
-    outcome; earlier roles remain applied. Does not install or load plug-ins
-    (plugin_load). Inspect the receipts before any further attempt. Use
-    plugin_select_preset for one known preset without a palette."""
+    from a live read, and authorized_to_modify=true. This build cannot select
+    presets: it refuses, before any write, a palette in which any applied role
+    would select one. Other roles are applied in a fixed order with later-tick
+    readback, stopping on an unknown or unverified outcome; earlier roles
+    remain applied. Does not install or load plug-ins (plugin_load). Inspect
+    the receipts before any further attempt."""
     return await _mix(
         apply_sound_selection,
         palette,
@@ -2663,7 +2599,7 @@ async def audio_transcribe_melody(
     """Transcribe a monophonic recording (a sung or played line) into notes.
 
     Reads the file only. Returns a note sequence in beats, ready to review and
-    then write with piano_roll_write_notes or export with compose_export_midi.
+    then export with compose_export_midi.
     Chords and full mixes transcribe poorly; give it one isolated line."""
     return await _measure(
         transcribe_monophonic,
@@ -2722,8 +2658,8 @@ async def compose_chord_progression(
     """Generate voice-led chords from Roman numerals in a key, without touching FL.
 
     Deterministic: the same inputs give the same notes. Returns a note sequence
-    in beats with a digest. Write it with piano_roll_write_notes, export it with
-    compose_export_midi, or pass the progression to compose_bassline."""
+    in beats with a digest. Export it with compose_export_midi, or pass the
+    progression to compose_bassline."""
     return await _mix(
         generate_chord_progression,
         progression,
@@ -2764,7 +2700,7 @@ async def compose_melody(
 
     Deterministic for a given seed; change the seed for alternatives. Returns a
     note sequence in beats. Fit the register to the chosen sound
-    (sound_plan_palette) before writing it with piano_roll_write_notes."""
+    (sound_plan_palette) before exporting it with compose_export_midi."""
     return await _mix(
         generate_melody,
         root=root,
@@ -2808,7 +2744,7 @@ async def compose_bassline(
 
     Deterministic for a given seed. Use the same progression and key as
     compose_chord_progression so the parts agree. Returns a note sequence in
-    beats for piano_roll_write_notes or compose_export_midi."""
+    beats for compose_export_midi."""
     return await _mix(
         generate_bassline,
         progression,
@@ -2849,7 +2785,7 @@ async def compose_drums(
     Deterministic for a given seed. Without drum_map it uses General MIDI
     drum notes, which many FL kits do not follow; read the kit's pads with
     plugin_get_pad_map and plan sounds first so hits land on the right pads.
-    Returns a note sequence in beats for piano_roll_write_notes."""
+    Returns a note sequence in beats for compose_export_midi."""
     return await _mix(
         generate_drums,
         style=style,
@@ -2888,8 +2824,7 @@ async def compose_export_midi(
 
     Writes a local file only; the FL project is unchanged. Re-opens and parses
     the file to verify its digest, tracks, and events. Refuses to replace an
-    existing file unless overwrite=true. The user can drag the file into FL;
-    use piano_roll_write_notes to put notes in the open project instead."""
+    existing file unless overwrite=true. The user can drag the file into FL."""
     return await _mix(
         export_type1_midi,
         path,
@@ -2899,146 +2834,6 @@ async def compose_export_midi(
         numerator=numerator,
         denominator=denominator,
         overwrite=overwrite,
-    )
-
-
-# ---------------------------------------------------------------------------
-# piano_roll: notes through FL's Piano Roll scripting
-# ---------------------------------------------------------------------------
-
-
-PianoRollPatternArg = Annotated[
-    int,
-    Field(ge=1, le=999, description="Pattern whose score to open; selected before the script runs."),
-]
-
-
-@mcp.tool(
-    name="piano_roll_setup",
-    annotations=WORKFLOW_STATE.model_copy(update={"title": "Set up Piano Roll scripting"}),
-)
-async def piano_roll_setup(
-    action: Annotated[
-        Literal["status", "prepare", "confirm"],
-        Field(description="status reads readiness; prepare writes the script; confirm records that the user ran it."),
-    ] = "status",
-    confirm_user_ran_script: Annotated[
-        bool,
-        Field(description="Required for action=confirm, after the user ran Postfader Apply once in FL."),
-    ] = False,
-) -> PianoRollBridgeStatus:
-    """Prepare the one-time Piano Roll scripting setup that note tools need.
-
-    status reports readiness without writing files. prepare writes the
-    Postfader Apply script into FL's Piano Roll scripts folder; the user must
-    then run it once from FL's Piano Roll menu. confirm with
-    confirm_user_ran_script=true arms this MCP process. Writes no notes. Reuse
-    the setup for the rest of the session."""
-    return await _mix(
-        PIANO_ROLL.bridge_action,
-        action,
-        confirm_user_ran_script=confirm_user_ran_script,
-    )
-
-
-@mcp.tool(
-    name="piano_roll_read_notes",
-    annotations=WORKFLOW_STATE.model_copy(update={"title": "Read Piano Roll notes"}),
-)
-async def piano_roll_read_notes(
-    channel_index: ChannelIndexArg,
-    pattern_number: PianoRollPatternArg,
-    offset: Annotated[
-        int, Field(ge=0, le=1_000_000, description="Raw note index to start this page at.")
-    ] = 0,
-    limit: Annotated[int, Field(ge=1, le=2048, description="Raw note indices per page.")] = 512,
-    selected_only: Annotated[
-        bool, Field(description="Return only notes selected in FL within this page.")
-    ] = False,
-    session_fingerprint: SessionFingerprintArg = None,
-) -> PianoRollNoteSnapshot:
-    """Read the notes of one channel in one pattern: pitch, timing, and expression.
-
-    Opens that score in FL's Piano Roll (which changes focus) but never changes
-    notes or enables writes. Needs the piano_roll_setup step done once. Read
-    before composing around existing material or transforming it. Follow
-    next_offset to page; a selected_only page can be empty and still have a
-    next_offset."""
-    return await _mix(
-        read_piano_roll_notes, channel_index=channel_index, pattern_number=pattern_number,
-        offset=offset, limit=limit, selected_only=selected_only,
-        session_fingerprint=session_fingerprint,
-    )
-
-
-@mcp.tool(
-    name="piano_roll_write_notes",
-    annotations=MUTATING.model_copy(update={"title": "Write Piano Roll notes"}),
-)
-async def piano_roll_write_notes(
-    notes: Annotated[
-        list[CreativeNote],
-        Field(min_length=1, max_length=2048, description="Notes with pitch, start and duration in quarter-note beats, and velocity."),
-    ],
-    channel_index: ChannelIndexArg,
-    pattern_number: PianoRollPatternArg,
-    mode: Annotated[
-        Literal["append", "replace"],
-        Field(description="append keeps existing notes; replace clears the score first."),
-    ] = "append",
-    auto_trigger: Annotated[
-        bool,
-        Field(description="Select the target and run the script automatically; false leaves both to the user."),
-    ] = True,
-) -> PianoRollDispatch:
-    """Write notes into one channel's Piano Roll score in a pattern.
-
-    Requires write mode and the one-time piano_roll_setup. Writes a local
-    script, selects the channel and pattern, and triggers FL's run-last-script
-    shortcut, then checks the selected target, the script's application, and
-    persistence. A dispatch alone is not proof the notes landed: inspect the
-    returned evidence, and treat a missing receipt as an unknown outcome, not a
-    reason to retry. Use piano_roll_transform_notes to edit existing notes.
-    Does not save the project."""
-    return await _mix(
-        write_piano_roll_notes,
-        notes,
-        channel_index=channel_index,
-        pattern_number=pattern_number,
-        mode=mode,
-        auto_trigger=auto_trigger,
-    )
-
-
-@mcp.tool(
-    name="piano_roll_transform_notes",
-    annotations=MUTATING.model_copy(update={"title": "Transform Piano Roll notes"}),
-)
-async def piano_roll_transform_notes(
-    request: Annotated[
-        PianoRollTransform,
-        Field(description="Operation (quantize, transpose, humanize, duplicate, delete, or clear), scope (selected or all), and its settings."),
-    ],
-    channel_index: ChannelIndexArg,
-    pattern_number: PianoRollPatternArg,
-    auto_trigger: Annotated[
-        bool,
-        Field(description="Select the target and run the script automatically; false leaves both to the user."),
-    ] = True,
-) -> PianoRollDispatch:
-    """Quantize, transpose, humanize, duplicate, delete, or clear existing notes.
-
-    Applies to the selected notes or the whole score of one channel in one
-    pattern. Requires write mode and the one-time piano_roll_setup; read the
-    notes first with piano_roll_read_notes. delete and clear remove notes in
-    scope. Works like piano_roll_write_notes: a dispatch is not proof, so
-    inspect the evidence. Use piano_roll_write_notes to add new notes."""
-    return await _mix(
-        transform_piano_roll,
-        request,
-        channel_index=channel_index,
-        pattern_number=pattern_number,
-        auto_trigger=auto_trigger,
     )
 
 
@@ -3093,9 +2888,11 @@ async def run_describe_operations(
     Read-only and offline. Plan schemas in run_execute, run_validate, and
     run_continue name operations without listing their fields, so call this
     first with the operations you will use (up to eight per call). Operations
-    cover composing, writing notes, patterns, markers, automation, direct
-    edits, sound palettes, presets, drum kits, effect processing, and review
-    steps; save, render, plug-in insertion, and Playlist clips are refused."""
+    cover composing, patterns, markers, automation, direct edits, sound
+    palettes, effect processing, and review steps; save, render, plug-in
+    insertion, and Playlist clips are refused, and so, in this build, are
+    note writes, Piano Roll transforms, preset and drum kit selection, and
+    applying a creation revision."""
     return describe_operations(operations)
 
 
@@ -3116,7 +2913,7 @@ async def run_validate(
     Checks the plan's structure, operation order, capabilities, targets, and
     scope rules against the current FL session and returns whether it is
     executable, its blockers, and a plan digest. include_readiness adds the
-    setup scorecard (Piano Roll setup, missing plug-ins, manual steps). Use it
+    setup scorecard (missing plug-ins, manual steps). Use it
     only when the user wants a plan reviewed or a diagnosis: run_execute
     performs the same checks itself, so do not validate before every run."""
     return await _mix(

@@ -9,6 +9,12 @@ run-last-script shortcut. Note writes are verified only when an authenticated
 script-runtime apply receipt and a second read-only persisted-score receipt
 agree; those receipts are never described as controller-API note access. Pure
 composition and MIDI export remain deterministic and verifiable on the host.
+
+This fork of PostFader removed Piano Roll scripting. The functions that would
+write a Piano Roll script or send FL's run-last-script shortcut raise
+``FeatureRemovedError``; the rest of the bridge code and its models stay in
+place, unreachable, because Production Runs and the creation pipeline import
+the models.
 """
 
 from __future__ import annotations
@@ -21,7 +27,6 @@ import os
 import platform
 import random
 import struct
-import subprocess
 import tempfile
 import threading
 import time
@@ -33,6 +38,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from .bridge_client import get_client
 from .contracts import ContractModel, SCHEMA_VERSION
+from .fork_removals import PIANO_ROLL_REMOVED, FeatureRemovedError
 from .host_config import fl_studio_user_data_dir
 from .readonly_inspector import IncompatibleFLStudio, connection_from_ping
 from .performance import (
@@ -1074,6 +1080,9 @@ class PianoRollBridgeStatus(CreativeModel):
     last_requested_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     last_operation: str | None = None
     authoritative_fl_note_readback_available: Literal[False] = False
+    # True in this fork, which removed Piano Roll scripting; setup_instruction
+    # then states the removal instead of a setup step.
+    removed: bool = False
     setup_instruction: str
 
 
@@ -1285,30 +1294,9 @@ def piano_roll_scripts_directory() -> Path:
 
 
 def _atomic_text(path: Path, content: str) -> str:
-    encoded = content.encode("ascii")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix=".postfader-pyscript-",
-            suffix=".tmp",
-            dir=path.parent,
-            delete=False,
-        ) as handle:
-            temporary_name = handle.name
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            try:
-                os.unlink(temporary_name)
-            except OSError:
-                pass
-    return hashlib.sha256(encoded).hexdigest()
+    """Refuse to write a Piano Roll script; this fork removed Piano Roll scripting."""
+
+    raise FeatureRemovedError(PIANO_ROLL_REMOVED)
 
 
 def _bootstrap_script(
@@ -2146,28 +2134,26 @@ class _PianoRollRegistry:
         self._arm_receipt_path: Path | None = None
 
     def status(self) -> PianoRollBridgeStatus:
-        path = piano_roll_scripts_directory() / PIANO_ROLL_SCRIPT_NAME
+        """Report Piano Roll scripting as removed without touching FL's folders.
+
+        Creation readiness and Production Runs read this, so it reports the
+        removal instead of raising, and never reads the scripts folder.
+        """
+
         kind = _platform_label()
         with self._lock:
             return PianoRollBridgeStatus(
                 observed_at=_now(),
                 platform=kind,
-                scripts_directory=str(path.parent),
-                script_path=str(path),
-                script_exists=path.is_file(),
-                shortcut="Cmd+Opt+Y" if kind == "macos" else "Ctrl+Alt+Y",
-                automatic_trigger_supported=kind in {"macos", "windows"},
-                prepared_this_session=self._prepared,
-                armed_this_session=self._armed,
-                last_request_id=self._last_request_id,
-                last_requested_note_count=self._last_count,
-                last_requested_digest=self._last_digest,
-                last_operation=self._last_operation,
-                setup_instruction=(
-                    "After prepare, open any Piano Roll and run Scripts > Postfader > "
-                    "Postfader Apply once. Then call this tool with action='confirm' "
-                    "and confirm_user_ran_script=true. Arming lasts for this MCP process."
-                ),
+                scripts_directory="",
+                script_path="",
+                script_exists=False,
+                shortcut="",
+                automatic_trigger_supported=False,
+                prepared_this_session=False,
+                armed_this_session=False,
+                removed=True,
+                setup_instruction=PIANO_ROLL_REMOVED,
             )
 
     def bridge_action(
@@ -2184,6 +2170,10 @@ class _PianoRollRegistry:
                     "confirm_user_ran_script is valid only for action='confirm'"
                 )
             return self.status()
+        # Preparing writes the Postfader Apply script and confirming arms the
+        # shortcut dispatch; this fork removed both. The code below is kept,
+        # unreachable, so upstream changes to it still merge.
+        raise FeatureRemovedError(PIANO_ROLL_REMOVED)
         # Setup mutates the same fixed script/armed state used by dispatch.
         # Always acquire the dispatch lock first, matching note/transform lock
         # order, so prepare cannot replace a committed script before its hotkey.
@@ -2333,129 +2323,9 @@ def _target_piano_roll(
 
 
 def _trigger_piano_roll_shortcut() -> HotkeyDispatch:
-    kind = _platform_label()
-    if os.environ.get("FL_BRIDGE_SANDBOXED") == "1":
-        return HotkeyDispatch(
-            platform=kind,
-            shortcut="Cmd+Opt+Y" if kind == "macos" else "Ctrl+Alt+Y",
-            fl_window_found=False,
-            fl_window_focused=False,
-            hotkey_dispatched=False,
-            error="Desktop shortcuts are disabled in the offline test environment.",
-        )
-    if kind == "macos":
-        script = """tell application "System Events"
-  tell process "FL Studio"
-    set frontmost to true
-    delay 0.4
-    keystroke "y" using {command down, option down}
-  end tell
-end tell"""
-        try:
-            completed = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        except Exception as exc:
-            return HotkeyDispatch(
-                platform=kind,
-                shortcut="Cmd+Opt+Y",
-                fl_window_found=False,
-                fl_window_focused=False,
-                hotkey_dispatched=False,
-                error=f"{type(exc).__name__}: {exc}"[:512],
-            )
-        error = (completed.stderr or "").strip()[:512] or None
-        return HotkeyDispatch(
-            platform=kind,
-            shortcut="Cmd+Opt+Y",
-            fl_window_found=completed.returncode == 0,
-            fl_window_focused=completed.returncode == 0,
-            hotkey_dispatched=completed.returncode == 0,
-            error=error if completed.returncode else None,
-        )
-    if kind == "windows":
-        try:
-            import ctypes
-            from ctypes import wintypes
+    """Refuse to focus FL or send its shortcut; this fork removed Piano Roll scripting."""
 
-            user32 = ctypes.windll.user32
-            found = {"window": 0}
-            callback_type = ctypes.WINFUNCTYPE(
-                ctypes.c_bool, wintypes.HWND, wintypes.LPARAM
-            )
-
-            def inspect_window(window: int, _parameter: int) -> bool:
-                if not user32.IsWindowVisible(window):
-                    return True
-                length = user32.GetWindowTextLengthW(window)
-                if length <= 0:
-                    return True
-                title = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(window, title, length + 1)
-                if "FL Studio" in title.value:
-                    found["window"] = window
-                    return False
-                return True
-
-            callback = callback_type(inspect_window)
-            user32.EnumWindows(callback, 0)
-            window = found["window"]
-            if not window:
-                return HotkeyDispatch(
-                    platform=kind,
-                    shortcut="Ctrl+Alt+Y",
-                    fl_window_found=False,
-                    fl_window_focused=False,
-                    hotkey_dispatched=False,
-                    error="FL Studio main window was not found",
-                )
-            user32.ShowWindow(window, 9)
-            user32.keybd_event(0x12, 0, 0, 0)
-            user32.SetForegroundWindow(window)
-            user32.keybd_event(0x12, 0, 0x0002, 0)
-            time.sleep(0.3)
-            focused = user32.GetForegroundWindow() == window
-            if not focused:
-                return HotkeyDispatch(
-                    platform=kind,
-                    shortcut="Ctrl+Alt+Y",
-                    fl_window_found=True,
-                    fl_window_focused=False,
-                    hotkey_dispatched=False,
-                    error="Windows did not grant FL Studio foreground focus",
-                )
-            for virtual_key in (0x11, 0x12, 0x59):
-                user32.keybd_event(virtual_key, 0, 0, 0)
-            for virtual_key in (0x59, 0x12, 0x11):
-                user32.keybd_event(virtual_key, 0, 0x0002, 0)
-            return HotkeyDispatch(
-                platform=kind,
-                shortcut="Ctrl+Alt+Y",
-                fl_window_found=True,
-                fl_window_focused=True,
-                hotkey_dispatched=True,
-            )
-        except Exception as exc:
-            return HotkeyDispatch(
-                platform=kind,
-                shortcut="Ctrl+Alt+Y",
-                fl_window_found=False,
-                fl_window_focused=False,
-                hotkey_dispatched=False,
-                error=f"{type(exc).__name__}: {exc}"[:512],
-            )
-    return HotkeyDispatch(
-        platform="unsupported",
-        shortcut="Ctrl+Alt+Y",
-        fl_window_found=False,
-        fl_window_focused=False,
-        hotkey_dispatched=False,
-        error="automatic Piano Roll triggering supports only macOS and Windows",
-    )
+    raise FeatureRemovedError(PIANO_ROLL_REMOVED)
 
 
 def write_piano_roll_notes(
@@ -2468,6 +2338,9 @@ def write_piano_roll_notes(
     session_fingerprint: str | None = None,
     target_fingerprint: str | None = None,
 ) -> PianoRollDispatch:
+    # Refuse before any bridge call or file write. The body below is kept,
+    # unreachable, so upstream changes to it still merge.
+    raise FeatureRemovedError(PIANO_ROLL_REMOVED)
     if not 1 <= len(notes) <= MAX_PIANO_ROLL_NOTES:
         raise ValueError(f"notes must contain 1..{MAX_PIANO_ROLL_NOTES} entries")
     if mode not in {"append", "replace"}:
@@ -2710,6 +2583,8 @@ def transform_piano_roll(
     auto_trigger: bool = True,
     session_fingerprint: str | None = None,
 ) -> PianoRollDispatch:
+    # Refuse before any bridge call or file write, as write_piano_roll_notes.
+    raise FeatureRemovedError(PIANO_ROLL_REMOVED)
     request_id = os.urandom(16).hex()
     script = _transform_script(request, request_id)
     with _PIANO_ROLL_DISPATCH_LOCK:

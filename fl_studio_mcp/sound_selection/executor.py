@@ -24,6 +24,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
+from ..fork_removals import PRESET_SELECTION_REMOVED
 from ..performance import TrackBController, TrackBInspector
 from ..plugin_atlas import AtlasRegistry, load_bundled_registry
 from ..plugin_atlas_mcp import (
@@ -1577,6 +1578,31 @@ class SoundSelectionService:
             else tuple(assignments)
         )
         ordered = tuple(sorted(selected_assignments, key=lambda item: (item.role_id.casefold(), item.assignment_id)))
+        # This fork removed preset selection. Refuse the whole application,
+        # before its preflight reads and any write, if any applied role would
+        # select a preset, so a palette never half-runs. Loop Starter rerolls
+        # are not presets and stay allowed.
+        preset_roles = tuple(
+            item for item in ordered if item.selection_action == "select_preset"
+        )
+        if preset_roles:
+            return self._finish_apply(
+                palette_id,
+                session_fingerprint=session,
+                selection_receipts=(),
+                new_assignment_receipts=(),
+                assignment_scope=ordered,
+                failed_assignment_id=preset_roles[0].assignment_id,
+                warnings=state.warnings,
+                blockers=(
+                    PRESET_SELECTION_REMOVED
+                    + " Roles that would select a preset: "
+                    + ", ".join(repr(item.role_id) for item in preset_roles[:16])
+                    + ("." if len(preset_roles) <= 16 else ", and more."),
+                ),
+                history_written=0,
+                status="failed",
+            )
         pending_receipt_ids = {
             item.assignment_id
             for item in ordered

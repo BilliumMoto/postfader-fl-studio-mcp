@@ -15,7 +15,6 @@
     "fl_studio_mcp/creation_review",
     "fl_studio_mcp/production_runs.py",
     "fl_studio_mcp/production_run_persistence.py",
-    "fl_studio_mcp/piano_roll.py",
     "fl_studio_mcp/saved_project_render.py",
     "fl_studio_mcp/plugin_loading.py",
     "scripts/build_release_bundles.py",

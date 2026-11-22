@@ -125,6 +125,11 @@ from .creative import (
     transform_piano_roll,
     write_piano_roll_notes,
 )
+from .fork_removals import (
+    PIANO_ROLL_REMOVED,
+    PRESET_SELECTION_REMOVED,
+    FeatureRemovedError,
+)
 from .performance import TrackBController, TrackBInspector
 from .plugin_atlas import load_bundled_registry
 from .production_run_persistence import (
@@ -1630,6 +1635,34 @@ _UNAVAILABLE_OPERATION_MESSAGES: dict[str, str] = {
     ),
 }
 
+# Operations whose only implementation writes Piano Roll notes or selects a
+# plug-in preset. This fork removed both features, so a plan containing any of
+# them fails structural validation before anything is written, and dispatch
+# refuses them as a backstop. apply_sound_palette is not listed: the palette
+# executor refuses, before any write, a palette whose roles select presets.
+_REMOVED_FEATURE_OPERATION_MESSAGES: dict[str, str] = {
+    "write_note_sequence": (
+        "This run is blocked because write_note_sequence writes notes through "
+        "FL's Piano Roll. " + PIANO_ROLL_REMOVED
+    ),
+    "transform_piano_roll": (
+        "This run is blocked because transform_piano_roll changes notes "
+        "through FL's Piano Roll. " + PIANO_ROLL_REMOVED
+    ),
+    "apply_creation_revision": (
+        "This run is blocked because apply_creation_revision applies its "
+        "revision as Piano Roll note writes. " + PIANO_ROLL_REMOVED
+    ),
+    "select_plugin_preset": (
+        "This run is blocked because select_plugin_preset selects a plug-in "
+        "preset. " + PRESET_SELECTION_REMOVED
+    ),
+    "select_drum_kit": (
+        "This run is blocked because select_drum_kit selects a drum kit "
+        "preset. " + PRESET_SELECTION_REMOVED
+    ),
+}
+
 
 def _generate_sequence(
     operation: GenerateChordProgressionOperation
@@ -2450,6 +2483,20 @@ def _structural_validation(
                 operation_id=operation_id,
             )
         )
+    for operation in operations:
+        removed_message = _REMOVED_FEATURE_OPERATION_MESSAGES.get(
+            operation.operation
+        )
+        if removed_message is not None:
+            blockers.append(
+                _blocker(
+                    "unsupported_by_postfader",
+                    "operation_removed_in_fork",
+                    removed_message,
+                    operation_id=operation.operation_id,
+                    evidence=(f"operation={operation.operation}",),
+                )
+            )
 
     def estimated_palette_roles(
         operation: ApplySoundPaletteOperation,
@@ -4366,6 +4413,10 @@ def _dispatch_operation(
 ) -> ProductionResultPayload:
     """Adapt one production operation to an existing PostFader implementation."""
 
+    removed_message = _REMOVED_FEATURE_OPERATION_MESSAGES.get(operation.operation)
+    if removed_message is not None:
+        # Validation already refuses these; never reach a removed feature.
+        raise FeatureRemovedError(removed_message)
     if isinstance(operation, StartReviewSessionOperation):
         from .creation_review.mcp import review_start
 
