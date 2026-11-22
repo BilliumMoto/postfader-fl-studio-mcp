@@ -161,6 +161,41 @@ class PresetBridgeTests(unittest.TestCase):
         self.assertEqual(result["pads"][0]["semitone_name"], "Note 36")
         self.assertTrue(result["pads"][1]["empty"])
 
+    def test_preset_owned_user_label_does_not_change_target_identity(self) -> None:
+        """Tested feature: a plug-in whose user label follows its preset keeps the same target identity when its preset changes.
+        Check: with the label reporting the current preset, reading the current preset before and after the plug-in moves to another preset gives the new label and an unchanged target fingerprint.
+        Mocks: the fake FL modules in tests/fakefl, with getPluginName patched so the user label is the current preset's name.
+        Test would be deprecated if: target fingerprints stop excluding a plug-in's user label.
+        """
+        selected = self.install_effect(["A", "B", "C"])
+        original_get_plugin_name = bridge.plugins.getPluginName
+
+        def preset_owned_user_name(
+            index: int,
+            slot_index: int = -1,
+            user_name: bool = False,
+            use_global_index: bool = False,
+        ) -> str:
+            if user_name:
+                return selected.presets[selected.current_preset]
+            return original_get_plugin_name(
+                index, slot_index, user_name, use_global_index
+            )
+
+        with mock.patch.object(
+            bridge.plugins, "getPluginName", side_effect=preset_owned_user_name
+        ):
+            before, _ = exhaust(bridge.cmd_plugin_current_preset(dict(EFFECT)))
+            # This fork cannot select presets; move the fake plug-in to its
+            # third preset directly, as a user changing it in FL would.
+            selected.current_preset = 2
+            after, _ = exhaust(bridge.cmd_plugin_current_preset(dict(EFFECT)))
+
+        self.assertEqual(before["plugin_user_name"], "A")
+        self.assertEqual(after["plugin_user_name"], "C")
+        self.assertEqual(after["current_preset_name"], "C")
+        self.assertEqual(after["target_fingerprint"], before["target_fingerprint"])
+
     def test_loop_starter_is_explicit_global_single_dispatch_and_unverified(self) -> None:
         channel = 1
         before = bridge._channel_summary(channel)

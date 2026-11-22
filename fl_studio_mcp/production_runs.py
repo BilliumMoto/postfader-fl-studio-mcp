@@ -1652,7 +1652,7 @@ UNAVAILABLE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType(
 # palette whose applied roles would select a preset, and the palette executor
 # refuses one produced by an earlier step of the run when that step reaches
 # it, by which time earlier operations in the run may already have applied.
-REMOVED_FEATURE_OPERATION_MESSAGES: dict[str, str] = {
+REMOVED_FEATURE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType({
     "write_note_sequence": (
         "This run is blocked because write_note_sequence writes notes through "
         "FL's Piano Roll. " + PIANO_ROLL_REMOVED
@@ -1680,7 +1680,7 @@ REMOVED_FEATURE_OPERATION_MESSAGES: dict[str, str] = {
         "This run is blocked because select_drum_kit selects a drum kit "
         "preset. " + PRESET_SELECTION_REMOVED
     ),
-}
+})
 
 
 def _generate_sequence(
@@ -5973,7 +5973,7 @@ class ProductionRunRegistry:
                 return _blocker(
                     "setup_or_session",
                     "piano_roll_context_unavailable",
-                    "Piano Roll writing needs one setup action: run Postfader Apply once in an FL Piano Roll, then continue this run.",
+                    "Piano Roll writing is unavailable. " + PIANO_ROLL_REMOVED,
                 )
         return None
 

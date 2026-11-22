@@ -42,6 +42,9 @@ def check_selection_actions(actions: frozenset[str] | set[str]) -> None:
     """Fail loudly when the palette model's selection actions differ from the reviewed set."""
 
     if set(actions) != KNOWN_SELECTION_ACTIONS:
+        # The hint below asks a maintainer to review and edit this module, a
+        # code change no test can make; the guard's own test checks that a
+        # matching set passes and a differing one raises.
         raise RuntimeError(
             "SoundPaletteAssignment.selection_action values %s differ from the "
             "set this fork reviewed, %s; review fork_removals.py before using "

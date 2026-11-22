@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest import mock
 
 from fl_studio_mcp.fork_removals import PRESET_SELECTION_REMOVED
 from fl_studio_mcp.sound_selection.executor import (
@@ -251,6 +252,125 @@ class SoundSelectionServiceTests(unittest.TestCase):
         plan = service.plan(self.LOOP_REQUEST, inventory=inventory)
         self.assertEqual(plan.assignments[0].selection_action, "loop_starter_reroll")
         return plan
+
+    def test_refused_preset_role_leaves_other_roles_applicable(self):
+        """Tested feature: refusing a palette apply because a role would select a preset leaves the palette usable for its other roles.
+        Check: a full apply of a palette with a preset role and a Loop Starter role is refused without recording a blocker, and a scoped apply of the Loop Starter role then rerolls once without inheriting the refusal, as does a replan.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: this fork restores preset selection.
+        """
+        synth_target = ChannelGeneratorTarget(channel_index=4)
+        request = SoundSelectionRequest(
+            brief="a loop and a bright lead",
+            source_strategy="mixed",
+            roles=(
+                SoundRoleRequest(
+                    role_id="loop", role_type="texture", target_candidates=(TARGET,)
+                ),
+                SoundRoleRequest(
+                    role_id="lead",
+                    role_type="lead",
+                    preferred_presets=("Bright Lead",),
+                    target_candidates=(synth_target,),
+                ),
+            ),
+        )
+        inventory = SoundInventory(
+            session_fingerprint=SESSION,
+            loaded_generators=(
+                self.loop_starter_target(),
+                SoundTargetInventory(
+                    target=synth_target,
+                    target_fingerprint="e" * 64,
+                    product_id="synthetic",
+                    product_name="Synthetic Synth",
+                    current_preset="Current",
+                    current_preset_index=0,
+                    preset_names=("Current", "Bright Lead"),
+                    preset_indices=(0, 1),
+                    preset_navigation_available=True,
+                    preset_identity_stable=True,
+                    preset_readback_available=True,
+                ),
+            ),
+        )
+        with TemporaryDirectory() as directory:
+            service, _, controller, mode, _ = self.make_service(directory)
+            plan = service.plan(request, inventory=inventory)
+            actions = {item.role_id: item.selection_action for item in plan.assignments}
+            self.assertEqual(actions, {"loop": "loop_starter_reroll", "lead": "select_preset"})
+
+            refused = service.apply(plan, SESSION, True)
+            state_after_refusal = service.get(plan.palette_id)
+            scoped = service.apply(plan.palette_id, SESSION, True, role_ids=("loop",))
+            replanned = service.plan(request, inventory=inventory)
+            replanned_state = service.get(replanned.palette_id)
+
+        self.assertEqual(refused.status, "failed")
+        self.assertIn(PRESET_SELECTION_REMOVED, " ".join(refused.blockers))
+        self.assertEqual(state_after_refusal.blockers, ())
+        self.assertEqual(state_after_refusal.apply_receipts, ())
+        self.assertNotIn(PRESET_SELECTION_REMOVED, " ".join(scoped.blockers))
+        self.assertEqual([item.role_id for item in scoped.assignment_scope], ["loop"])
+        self.assertEqual(len(controller.reroll_calls), 1)
+        self.assertEqual(controller.calls, [])
+        self.assertEqual(len(mode.calls), 1)
+        self.assertNotIn(PRESET_SELECTION_REMOVED, " ".join(replanned_state.blockers))
+
+    def test_reapplying_verified_keep_current_palette_skips_completed_roles(self):
+        """Tested feature: applying a palette again skips roles whose receipts are already verified.
+        Check: a keep-current palette applied twice is "applied" both times, keeps one verified receipt, and the second apply records no new usage and makes no controller or write-mode call.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palette application stops treating verified receipts as completed.
+        """
+        inventory = SoundInventory(
+            session_fingerprint=SESSION,
+            loaded_generators=(
+                SoundTargetInventory(
+                    target=TARGET,
+                    target_fingerprint=TARGET_FINGERPRINT,
+                    product_id="synthetic",
+                    product_name="Synthetic Synth",
+                    current_preset="Current",
+                    current_preset_index=0,
+                    preset_names=("Current",),
+                    preset_indices=(0,),
+                    preset_navigation_available=True,
+                    preset_identity_stable=True,
+                    preset_readback_available=True,
+                ),
+            ),
+        )
+        with TemporaryDirectory() as directory:
+            service, _, controller, mode, history = self.make_service(directory)
+            plan = service.plan(
+                SoundSelectionRequest(
+                    brief="keep the lead",
+                    roles=(
+                        SoundRoleRequest(
+                            role_id="main_lead",
+                            role_type="lead",
+                            preferred_presets=("Current",),
+                        ),
+                    ),
+                ),
+                inventory=inventory,
+            )
+            self.assertEqual(plan.assignments[0].selection_action, "keep_current")
+            first = service.apply(plan, SESSION, True)
+            usage_after_first = len(history.usage_calls)
+            second = service.apply(plan.palette_id, SESSION, True)
+
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(second.status, "applied")
+        self.assertEqual(len(second.assignment_receipts), 1)
+        self.assertTrue(second.assignment_receipts[0].verified)
+        self.assertEqual(second.assignment_receipts, first.assignment_receipts)
+        self.assertEqual(usage_after_first, 1)
+        self.assertEqual(len(history.usage_calls), 1)
+        self.assertEqual(controller.calls, [])
+        self.assertEqual(controller.reroll_calls, [])
+        self.assertEqual(mode.calls, [])
 
     def test_replanning_identical_palette_preserves_completed_receipts(self):
         """Tested feature: replanning the same request on the same inventory returns the same palette and keeps its receipts.
@@ -511,9 +631,9 @@ class SoundSelectionServiceTests(unittest.TestCase):
         self.assertEqual(len(controller.reroll_calls), 1)
 
     def test_selection_action_guard_fails_loudly_on_an_unreviewed_value(self):
-        """Tested feature: a palette selection action this fork has not reviewed stops the package from loading instead of being applied.
-        Check: the guard accepts the palette model's current actions, raises on an added or missing value, and the actions palettes may apply exclude preset selection.
-        Mocks: none.
+        """Tested feature: check_selection_actions, which sound_selection.models runs at import, rejects selection actions this fork has not reviewed.
+        Check: it accepts the palette model's current actions, raises on an added or missing value, passes again once the reviewed set is extended to match, and the actions palettes may apply exclude preset selection.
+        Mocks: KNOWN_SELECTION_ACTIONS, patched to a reviewed set extended with the added value.
         Test would be deprecated if: palette selection actions stop being checked against a reviewed set.
         """
         from typing import get_args
@@ -529,6 +649,12 @@ class SoundSelectionServiceTests(unittest.TestCase):
             fork_removals.check_selection_actions(current | {"select_sample"})
         with self.assertRaisesRegex(RuntimeError, "review fork_removals.py"):
             fork_removals.check_selection_actions(current - {"keep_current"})
+        with mock.patch.object(
+            fork_removals,
+            "KNOWN_SELECTION_ACTIONS",
+            fork_removals.KNOWN_SELECTION_ACTIONS | {"select_sample"},
+        ):
+            fork_removals.check_selection_actions(current | {"select_sample"})
         self.assertEqual(
             fork_removals.APPLICABLE_SELECTION_ACTIONS,
             {"keep_current", "loop_starter_reroll"},

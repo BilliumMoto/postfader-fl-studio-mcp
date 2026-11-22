@@ -2231,11 +2231,7 @@ class _PianoRollRegistry:
     def require_armed(self) -> None:
         with self._lock:
             if not self._armed:
-                raise ValueError(
-                    "Piano Roll auto-trigger is not armed for this MCP session; call "
-                    "piano_roll_setup(action='prepare'), run the script once in FL, "
-                    "then call piano_roll_setup(action='confirm', confirm_user_ran_script=true)"
-                )
+                raise FeatureRemovedError(PIANO_ROLL_REMOVED)
 
     def record(
         self,

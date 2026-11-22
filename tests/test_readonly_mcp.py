@@ -439,9 +439,6 @@ async def run():
                     text,
                 )
 
-            # Exact preset selection is a verified project mutation too, but
-            # its contract has preset identity guards rather than the generic
-            # expected-before field used by the older write set.
             # Palette application must fail closed on missing conversational
             # authorization before it can resolve a process-local plan or
             # reach any FL write boundary.

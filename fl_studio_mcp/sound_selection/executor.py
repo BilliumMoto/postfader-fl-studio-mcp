@@ -1588,22 +1588,28 @@ class SoundSelectionService:
             if item.selection_action not in APPLICABLE_SELECTION_ACTIONS
         )
         if preset_roles:
-            return self._finish_apply(
-                palette_id,
+            # Return the refusal without recording it in the palette's state:
+            # the palette is unchanged, so a later apply of its other roles,
+            # or a replan that returns the same palette, must not inherit
+            # this refusal as a blocker.
+            return SoundSelectionApplyResult(
+                palette_id=palette_id,
+                status="failed",
                 session_fingerprint=session,
-                selection_receipts=(),
-                new_assignment_receipts=(),
+                state=state,
                 assignment_scope=ordered,
+                receipts=(),
+                assignment_receipts=state.apply_receipts,
                 failed_assignment_id=preset_roles[0].assignment_id,
-                warnings=state.warnings,
+                verified_count=sum(1 for item in state.apply_receipts if item.verified),
+                history_written=0,
+                warnings=_dedupe(state.warnings, limit=MAX_SERVICE_WARNINGS),
                 blockers=(
                     PRESET_SELECTION_REMOVED
                     + " Roles that would select a preset: "
                     + ", ".join(repr(item.role_id) for item in preset_roles[:16])
                     + ("." if len(preset_roles) <= 16 else ", and more."),
                 ),
-                history_written=0,
-                status="failed",
             )
         pending_receipt_ids = {
             item.assignment_id
