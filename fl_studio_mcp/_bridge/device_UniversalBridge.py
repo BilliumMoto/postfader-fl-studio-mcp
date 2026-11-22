@@ -5979,7 +5979,7 @@ def _dispatch(req):
             "error": "FL Studio is loading a project; wait for loading to finish and read the connection again",
         })
     allowed = READ_ONLY_COMMANDS | SESSION_CONTROL_COMMANDS | NAVIGATION_COMMANDS
-    lock_reason = "bridge is locked read-only for project edits; editor navigation is available"
+    lock_reason = "bridge is locked read-only for project edits"
     if LEAN_WRITES_ENABLED:
         allowed = allowed | LEAN_WRITE_COMMANDS
         lock_reason = (

@@ -5,7 +5,7 @@ write fails, both returning NULL with no exception set. MIDI is the only
 channel left, so this is the transport that actually carries traffic in
 practice and it needs the same scrutiny as the others.
 
-The bridge runs here with its socket and file transports forced to fail, its
+The bridge runs here with its MIDI transport, the only one it starts, its
 `device.midiOutSysex` wired to a real MIDI port, and its `OnSysEx` fed from a
 real MIDI input - the same shape as FL, minus FL.
 """
@@ -76,6 +76,11 @@ def find_port(collection):
 
 
 def main():
+    """Tested feature: the bridge and client carry commands over a real virtual MIDI port.
+    Check: the bridge starts MIDI, the client selects MIDI, and handshakes, commands and framing round trip over SysEx.
+    Mocks: the fake FL modules in tests/fakefl; MIDI traffic is real.
+    Test would be deprecated if: the bridge stops using MIDI SysEx.
+    """
     global FAIL
     try:
         import rtmidi
@@ -113,22 +118,8 @@ def main():
 
     print("\n-- transport selection --")
 
-    class Dead:
-        def __init__(self, name):
-            self.name = name
-
-        def start(self):
-            raise IOError("blocked by FL's sandbox")
-
-    real_sock, real_file = bridge._SocketTransport, bridge._FileTransport
-    bridge._SocketTransport = lambda: Dead("tcp")
-    bridge._FileTransport = lambda: Dead("files")
-    try:
-        bridge.OnInit()
-    finally:
-        bridge._SocketTransport, bridge._FileTransport = real_sock, real_file
-
-    check("falls through to MIDI when sockets and files are blocked",
+    bridge.OnInit()
+    check("starts the MIDI transport",
           bridge._transport.name == "midi", bridge._transport.name)
 
     stop = threading.Event()
@@ -149,7 +140,7 @@ def main():
 
     from fl_studio_mcp.bridge_client import BridgeClient, BridgeError
 
-    client = BridgeClient(port=1, mailbox="/nonexistent-flmcp", timeout=25)
+    client = BridgeClient(timeout=25)
 
     print("\n-- handshake over SysEx --")
     info = client.ping()

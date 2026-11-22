@@ -1,7 +1,7 @@
 """Client for the Universal Bridge script running inside FL Studio.
 
-This fork of PostFader reaches FL Studio only over MIDI SysEx, which is what
-works with FL Studio: it sandboxes its script interpreter so that both
+This fork of PostFader connects to the bridge only over MIDI SysEx, which is
+what works with FL Studio: it sandboxes its script interpreter so that both
 sockets and filesystem writes fail. ``BridgeClient`` builds no other
 transport. The loopback TCP and file mailbox transport classes stay in this
 module, so upstream changes to them still merge, and tests use the TCP one as
@@ -180,12 +180,16 @@ IDEMPOTENT_READ_COMMANDS = frozenset({
 })
 MAX_IDEMPOTENT_READ_RECONNECTS = 1
 RECONNECT_DELAY_SECONDS = 0.05
+# Settings of the TCP and file mailbox transports, which this fork never
+# builds. BridgeClient refuses to start while one is set, rather than
+# silently ignoring it.
+REMOVED_TRANSPORT_SETTINGS = ("FL_BRIDGE_HOST", "FL_BRIDGE_PORT", "FL_BRIDGE_MAILBOX")
 
 # No test can follow these steps: each needs FL Studio running and a real
 # virtual MIDI port, which the offline suite never opens.
 NOT_CONNECTED_HELP = (
     "Could not reach the Universal Bridge inside FL Studio.\n"
-    "This build reaches FL Studio only over MIDI SysEx.\n"
+    "This build connects to the bridge only over MIDI SysEx.\n"
     "{midi_line}\n"
     "Check, in order:\n"
     "  1. FL Studio is running.\n"
@@ -1129,6 +1133,21 @@ class BridgeClient:
     """
 
     def __init__(self, timeout=TIMEOUT, midi_port=MIDI_PORT):
+        removed_settings = [
+            name for name in REMOVED_TRANSPORT_SETTINGS if name in os.environ
+        ]
+        if removed_settings:
+            raise BridgeError(
+                "%s %s set, but this build connects to the bridge only over "
+                "MIDI SysEx and has no TCP or file mailbox transport to apply "
+                "%s to. Unset %s."
+                % (
+                    ", ".join(removed_settings),
+                    "is" if len(removed_settings) == 1 else "are",
+                    "it" if len(removed_settings) == 1 else "them",
+                    "it" if len(removed_settings) == 1 else "them",
+                )
+            )
         self.timeout = timeout
         self._transports = []
         # FL_BRIDGE_ENABLE_MIDI gates the transport itself, not merely the

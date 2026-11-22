@@ -27,7 +27,12 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from .production_runs import ProductionOperation, UnavailableProductionOperation
+from .production_runs import (
+    REMOVED_FEATURE_OPERATION_MESSAGES,
+    _UNAVAILABLE_OPERATION_MESSAGES,
+    ProductionOperation,
+    UnavailableProductionOperation,
+)
 
 
 DESCRIBE_OPERATIONS_TOOL = "run_describe_operations"
@@ -68,10 +73,27 @@ PRODUCTION_OPERATIONS: dict[str, type[BaseModel]] = {
     if model is not UnavailableProductionOperation
     for name in _operation_names(model)
 }
+# Operations whose only implementation needs a feature this fork removed. The
+# run models still parse them so validation can refuse them with a reason, but
+# they are advertised and described as unavailable, not as operations to use.
+REMOVED_PRODUCTION_OPERATIONS = tuple(sorted(REMOVED_FEATURE_OPERATION_MESSAGES))
+if not set(REMOVED_PRODUCTION_OPERATIONS) <= set(PRODUCTION_OPERATIONS):
+    raise RuntimeError("every removed operation must be a Production Run operation")
+AVAILABLE_PRODUCTION_OPERATIONS = tuple(
+    sorted(set(PRODUCTION_OPERATIONS) - set(REMOVED_PRODUCTION_OPERATIONS))
+)
 UNAVAILABLE_PRODUCTION_OPERATIONS = _operation_names(UnavailableProductionOperation)
 _ALL_PRODUCTION_OPERATION_NAMES = frozenset(PRODUCTION_OPERATIONS) | frozenset(
     UNAVAILABLE_PRODUCTION_OPERATIONS
 )
+_UNAVAILABLE_REASONS = {
+    **_UNAVAILABLE_OPERATION_MESSAGES,
+    **REMOVED_FEATURE_OPERATION_MESSAGES,
+}
+if set(_UNAVAILABLE_REASONS) != set(UNAVAILABLE_PRODUCTION_OPERATIONS) | set(
+    REMOVED_PRODUCTION_OPERATIONS
+):
+    raise RuntimeError("every unavailable operation must have exactly one reason")
 
 ProductionOperationName = Literal[
     "generate_chord_progression",
@@ -81,17 +103,13 @@ ProductionOperationName = Literal[
     "adapt_note_sequence",
     "prepare_pattern",
     "select_pattern",
-    "write_note_sequence",
-    "transform_piano_roll",
     "add_section_markers",
     "record_automation_value",
     "apply_verified_batch",
     "plan_sound_palette",
     "apply_sound_palette",
     "create_sound_palette_variation",
-    "select_plugin_preset",
     "inspect_drum_map",
-    "select_drum_kit",
     "record_sound_feedback",
     "plan_processing",
     "apply_processing_plan",
@@ -101,12 +119,11 @@ ProductionOperationName = Literal[
     "evaluate_creation",
     "record_creation_feedback",
     "plan_creation_revision",
-    "apply_creation_revision",
     "compare_revision_bounces",
     "create_playlist_handoff",
     "create_delivery_manifest",
 ]
-if set(get_args(ProductionOperationName)) != set(PRODUCTION_OPERATIONS):
+if set(get_args(ProductionOperationName)) != set(AVAILABLE_PRODUCTION_OPERATIONS):
     raise RuntimeError("ProductionOperationName must list every available operation")
 
 
@@ -228,10 +245,12 @@ def _compact_production_operations(root: dict[str, Any], node: dict[str, Any]) -
             "waits for. A field can refer to an earlier operation's output with "
             '{"reference": "operation_output", "operation_id": ..., "output": ...}. '
             "save_project, render_project, insert_plugin and create_playlist_clip are "
-            "not available in FL Studio's scripting API and are refused."
+            "not available in FL Studio's scripting API and are refused, and so are "
+            + ", ".join(REMOVED_PRODUCTION_OPERATIONS)
+            + ", which need features this fork of PostFader removed."
         ),
         "properties": {
-            "operation": {"type": "string", "enum": sorted(PRODUCTION_OPERATIONS)},
+            "operation": {"type": "string", "enum": list(AVAILABLE_PRODUCTION_OPERATIONS)},
             **shared,
         },
         "required": ["operation", "operation_id"],
@@ -308,6 +327,10 @@ class OperationCatalog(BaseModel):
 
     operations: tuple[OperationDescription, ...]
     unavailable_operations: tuple[str, ...]
+    unavailable_reasons: dict[str, str] = Field(
+        default_factory=dict,
+        description="Why each unavailable operation is refused, keyed by operation name.",
+    )
     guidance: str
 
 
@@ -330,7 +353,16 @@ def describe_operations(
 ) -> OperationCatalog:
     """List every operation and return exact schemas for the requested ones."""
 
-    unknown = sorted(set(operations) - set(PRODUCTION_OPERATIONS))
+    removed = sorted(set(operations) & set(REMOVED_PRODUCTION_OPERATIONS))
+    if removed:
+        raise ValueError(
+            "unavailable Production Run operation(s): "
+            + "; ".join(
+                "%s: %s" % (name, REMOVED_FEATURE_OPERATION_MESSAGES[name])
+                for name in removed
+            )
+        )
+    unknown = sorted(set(operations) - set(AVAILABLE_PRODUCTION_OPERATIONS))
     if unknown:
         raise ValueError(
             "unknown Production Run operation(s): %s" % ", ".join(unknown)
@@ -341,7 +373,7 @@ def describe_operations(
         )
     requested = set(operations)
     entries = []
-    for name in sorted(PRODUCTION_OPERATIONS):
+    for name in AVAILABLE_PRODUCTION_OPERATIONS:
         model = PRODUCTION_OPERATIONS[name]
         entries.append(
             OperationDescription(
@@ -361,6 +393,9 @@ def describe_operations(
         )
     return OperationCatalog(
         operations=tuple(entries),
-        unavailable_operations=tuple(sorted(UNAVAILABLE_PRODUCTION_OPERATIONS)),
+        unavailable_operations=tuple(
+            sorted((*UNAVAILABLE_PRODUCTION_OPERATIONS, *REMOVED_PRODUCTION_OPERATIONS))
+        ),
+        unavailable_reasons=dict(sorted(_UNAVAILABLE_REASONS.items())),
         guidance=_CATALOG_GUIDANCE,
     )

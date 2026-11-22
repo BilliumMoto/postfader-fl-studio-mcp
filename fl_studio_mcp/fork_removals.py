@@ -8,9 +8,9 @@ either feature raise ``FeatureRemovedError`` with one of the messages below,
 and Production Runs and sound palettes refuse plans that need them before
 anything is written.
 
-The fork also reaches FL Studio only over MIDI; that change needs no error of
-its own, because a client without MIDI has no transport and reports the
-existing not-connected error.
+The fork's live bridge to FL Studio also uses only MIDI; that change needs no
+error of its own, because a client without MIDI has no transport and reports
+the existing not-connected error.
 """
 
 from __future__ import annotations

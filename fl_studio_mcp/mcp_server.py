@@ -380,9 +380,9 @@ unknown outcomes are never replayed.
 
 Sounds: sound_plan_palette then sound_apply_palette (or the palette operations
 inside a run). Apply takes the session_fingerprint from a live read. Keep user
-preferences, exclusions, locked roles and continuity in the request. Select the
-palette before writing notes; pass base_palette_id to plan a later section's
-variation. This build cannot select presets, so sound_apply_palette refuses a
+preferences, exclusions, locked roles and continuity in the request. Plan the
+palette before composing, so parts fit the chosen sounds; pass base_palette_id
+to plan a later section's variation. This build cannot select presets, so sound_apply_palette refuses a
 palette whose roles need one. Atlas supplies offline product knowledge; only a
 live inventory establishes a loaded instrument or effect. Read presets and
 non-GM drum pad maps (plugin_list_presets, plugin_get_pad_map) before
@@ -2243,8 +2243,9 @@ async def sound_plan_palette(
     with score reasons and a palette_id, without changing FL or history. With
     base_palette_id it plans a variation for a later section instead, keeping
     the base palette's anchors except replace_roles. Explicit roles and
-    preferences override genre defaults. Review the plan, then apply it with
-    sound_apply_palette before writing notes, so parts fit the chosen sounds."""
+    preferences override genre defaults. Review the plan before composing, so
+    parts fit the chosen sounds; sound_apply_palette refuses any role in it
+    that would select a preset."""
     if base_palette_id is None:
         if section is not None or replace_roles:
             raise ToolInputError("section and replace_roles apply only with base_palette_id")

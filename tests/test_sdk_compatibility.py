@@ -134,6 +134,13 @@ class MCPCompatibilityTests(unittest.TestCase):
         self.assertLess(sum(sizes.values()), 2_200_000)
 
     def test_operation_schemas_are_served_on_demand(self) -> None:
+        """Tested feature: run_describe_operations lists the operations agents can use and serves exact schemas on request, with removed ones reported as unavailable.
+        Check: the listed operations equal the run tools' advertised enum, only requested schemas are included and validate, and the five removed operations appear only as unavailable, each with its removal reason, and cannot be described.
+        Mocks: none.
+        Test would be deprecated if: run_describe_operations or the fork's removal of those operations goes away.
+        """
+        from fl_studio_mcp import production_runs, tool_schemas
+
         tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
         plan = tools["run_execute"].input_schema["$defs"]["ProductionRunPlan"]
         advertised = plan["properties"]["operations"]["items"]["properties"]["operation"]["enum"]
@@ -146,7 +153,33 @@ class MCPCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             [name for name, item in listed.items() if not item["summary"].endswith(".")], []
         )
-        self.assertIsNone(listed["write_note_sequence"]["json_schema"])
+        self.assertIsNone(listed["select_pattern"]["json_schema"])
+        removed = set(production_runs.REMOVED_FEATURE_OPERATION_MESSAGES)
+        self.assertEqual(
+            removed,
+            {
+                "write_note_sequence",
+                "transform_piano_roll",
+                "select_plugin_preset",
+                "select_drum_kit",
+                "apply_creation_revision",
+            },
+        )
+        self.assertEqual(removed & set(listed), set())
+        self.assertEqual(removed & set(advertised), set())
+        catalog = result.structured_content
+        self.assertLessEqual(removed, set(catalog["unavailable_operations"]))
+        self.assertIn("save_project", catalog["unavailable_operations"])
+        for name in removed:
+            self.assertEqual(
+                catalog["unavailable_reasons"][name],
+                production_runs.REMOVED_FEATURE_OPERATION_MESSAGES[name],
+            )
+        self.assertEqual(
+            set(catalog["unavailable_reasons"]), set(catalog["unavailable_operations"])
+        )
+        with self.assertRaisesRegex(ValueError, "unavailable.*write_note_sequence"):
+            tool_schemas.describe_operations(("write_note_sequence",))
 
         validator = Draft202012Validator(listed["generate_melody"]["json_schema"])
         operation = {"operation": "generate_melody", "operation_id": "melody-1", "bars": 8}

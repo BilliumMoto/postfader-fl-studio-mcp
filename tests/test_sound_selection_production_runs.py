@@ -9,6 +9,7 @@ from unittest import mock
 
 from fl_studio_mcp import creative
 from fl_studio_mcp import production_runs as runs
+from fl_studio_mcp.fork_removals import PRESET_SELECTION_REMOVED
 from fl_studio_mcp.creation_pipeline import live_readiness
 from fl_studio_mcp.creative import HotkeyDispatch, NoteSequence
 from fl_studio_mcp.sound_selection.models import (
@@ -184,6 +185,56 @@ class SoundSelectionProductionRunTests(unittest.TestCase):
         self.assertEqual(
             [(item.code, item.operation_id) for item in validation.blockers],
             [("operation_removed_in_fork", "write")],
+        )
+
+    def test_inline_palette_with_preset_roles_is_refused_at_validation(self) -> None:
+        """Tested feature: a run applying an inline palette whose applied roles would select a preset is refused before anything runs.
+        Check: validation blocks such a palette, naming only the applied preset roles, honours role_ids, and does not block a palette whose roles keep their current presets.
+        Mocks: none.
+        Test would be deprecated if: this fork restores preset selection.
+        """
+        inline = palette()
+
+        def blockers_for(operation: runs.ApplySoundPaletteOperation):
+            validation = runs.validate_production_run(
+                run_request(),
+                runs.ProductionRunPlan(plan_id="inline-palette", operations=(operation,)),
+                inspect_live=False,
+            )
+            return [
+                item
+                for item in validation.blockers
+                if item.code == "palette_preset_selection_removed"
+            ]
+
+        every_role = blockers_for(
+            runs.ApplySoundPaletteOperation(operation_id="apply", palette=inline)
+        )
+        self.assertEqual(len(every_role), 1)
+        self.assertEqual(every_role[0].operation_id, "apply")
+        self.assertEqual(every_role[0].evidence, ("role=main_lead", "role=drums"))
+        self.assertIn(PRESET_SELECTION_REMOVED, every_role[0].message)
+
+        scoped = blockers_for(
+            runs.ApplySoundPaletteOperation(
+                operation_id="apply", palette=inline, role_ids=("drums",)
+            )
+        )
+        self.assertEqual(scoped[0].evidence, ("role=drums",))
+
+        keep_current = inline.model_copy(
+            update={
+                "assignments": tuple(
+                    item.model_copy(update={"selection_action": "keep_current"})
+                    for item in inline.assignments
+                )
+            }
+        )
+        self.assertEqual(
+            blockers_for(
+                runs.ApplySoundPaletteOperation(operation_id="apply", palette=keep_current)
+            ),
+            [],
         )
 
     def test_incompatible_palette_reference_is_rejected(self) -> None:

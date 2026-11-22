@@ -283,7 +283,5 @@ class PresetPerformanceTests(unittest.TestCase):
         self.assertNotIn("channels.rerollLoopStarterLoop", IDEMPOTENT_READ_COMMANDS)
 
 
-
-
 if __name__ == "__main__":
     unittest.main()

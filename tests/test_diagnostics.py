@@ -432,7 +432,6 @@ class DoctorEvidenceTests(unittest.TestCase):
         self.assertEqual(captured["FL_BRIDGE_MIDI_PORT"], "Exact Fixture Port")
 
 
-
 class NativeMidiProbeTests(unittest.TestCase):
     def test_native_midi_probe_child_opens_no_console_window(self):
         """Tested feature: the doctor's MIDI port probe child opens no console window on Windows.

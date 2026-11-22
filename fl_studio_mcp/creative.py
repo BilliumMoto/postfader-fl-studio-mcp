@@ -2279,6 +2279,10 @@ def _target_piano_roll(
     target_fingerprint: str | None = None,
     navigation_only: bool = False,
 ) -> PianoRollTargetReceipt:
+    # Selecting and focusing the Piano Roll target was removed with Piano Roll
+    # scripting. The body below is kept, unreachable, so upstream changes to
+    # it still merge.
+    raise FeatureRemovedError(PIANO_ROLL_REMOVED)
     if type(channel_index) is not int or channel_index < 0:
         raise ValueError("channel_index must be a non-negative global index")
     if type(pattern_number) is not int or not 1 <= pattern_number <= 999:

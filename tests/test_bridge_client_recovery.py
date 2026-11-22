@@ -939,7 +939,6 @@ class BridgeClientRecoveryTests(unittest.TestCase):
         self.assertIn("owner pid 42", str(raised.exception))
 
 
-
 class MidiOnlyClientTests(unittest.TestCase):
     """Mocks: the TCP and file transport classes, replaced with stand-ins that fail if constructed."""
 
@@ -979,6 +978,23 @@ class MidiOnlyClientTests(unittest.TestCase):
         self.assertIn("FL_BRIDGE_MIDI_PORT", message)
         self.assertNotIn("TCP", message)
         self.assertNotIn("mailbox", message)
+
+    def test_removed_transport_settings_refuse_until_unset(self):
+        """Tested feature: the client refuses to start while a TCP or file mailbox setting is set, instead of ignoring it.
+        Check: with each of FL_BRIDGE_HOST, FL_BRIDGE_PORT and FL_BRIDGE_MAILBOX set, construction raises naming it and saying to unset it; after unsetting, construction succeeds.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        for name in bridge_client.REMOVED_TRANSPORT_SETTINGS:
+            with self.subTest(setting=name):
+                with mock.patch.dict(os.environ, {name: "unused"}):
+                    with self.assertRaises(BridgeError) as refused:
+                        BridgeClient(midi_port="Configured Loopback")
+                    self.assertIn(name, str(refused.exception))
+                    self.assertIn("Unset it", str(refused.exception))
+                    os.environ.pop(name)
+                    with mock.patch.object(bridge_client, "MIDI_ENABLED", False):
+                        client = BridgeClient(midi_port="Configured Loopback")
+                    self.assertEqual(client._transports, [])
 
     def test_midi_probe_child_opens_no_console_window(self):
         """Tested feature: the MIDI port probe's child Python opens no console window on Windows.

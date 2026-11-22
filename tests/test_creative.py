@@ -684,7 +684,7 @@ class CreativeTests(unittest.TestCase):
 
     def test_piano_roll_scripting_refuses_before_any_bridge_call_or_file_write(self) -> None:
         """Tested feature: every Piano Roll path this fork removed refuses before it reaches FL or writes a script.
-        Check: note writes, transforms, setup, script writing and the shortcut each raise FeatureRemovedError, no bridge command is sent, the scripts folder stays empty, and status reports the removal without reading that folder.
+        Check: note writes, transforms, setup, targeting, script writing and the shortcut each raise FeatureRemovedError, no bridge command is sent, the scripts folder stays empty, and status reports the removal without reading that folder.
         Mocks: the bridge client, replaced with a recording client; the scripts folder, pointed at a temporary directory.
         Test would be deprecated if: this fork restores Piano Roll scripting.
         """
@@ -706,7 +706,14 @@ class CreativeTests(unittest.TestCase):
             mock.patch("fl_studio_mcp.creative.get_client", return_value=client),
         ):
             with PIANO_ROLL._lock:
+                armed_before = PIANO_ROLL._armed
                 PIANO_ROLL._armed = True
+
+            def restore_armed() -> None:
+                with PIANO_ROLL._lock:
+                    PIANO_ROLL._armed = armed_before
+
+            self.addCleanup(restore_armed)
             refusals = {
                 "write notes": lambda: write_piano_roll_notes(
                     notes, channel_index=0, pattern_number=1
@@ -727,6 +734,7 @@ class CreativeTests(unittest.TestCase):
                     Path(scripts) / creative_module.PIANO_ROLL_SCRIPT_NAME, "x"
                 ),
                 "shortcut": creative_module._trigger_piano_roll_shortcut,
+                "target": lambda: creative_module._target_piano_roll(0, 1),
             }
             for label, invoke in refusals.items():
                 with self.subTest(path=label):
