@@ -1,5 +1,7 @@
 # PostFader website copy
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 This is the canonical product-copy deck for the PostFader website. The
 repository does not currently contain a website implementation, so these
 sections are ready to move into the website project without inventing new

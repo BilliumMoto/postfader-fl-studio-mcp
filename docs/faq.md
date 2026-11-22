@@ -104,10 +104,8 @@ See [FL Studio limits](fl-constraints.md).
 
 ### Does it work on Piano Roll notes?
 
-Yes. It can read notes, write new ones, and quantize, transpose, humanize,
-duplicate, delete, or clear them. FL Studio runs Piano Roll scripts separately,
-so once per PostFader session you run **Scripts → Postfader → Postfader
-Apply** in a Piano Roll window when the AI asks.
+Not in this fork, which removed Piano Roll scripting. It can still generate
+parts and export them as MIDI files. See [FORK.md](../FORK.md).
 
 ## Safety and privacy
 

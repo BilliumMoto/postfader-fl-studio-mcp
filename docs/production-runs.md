@@ -1,5 +1,7 @@
 # Production Runs
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 A Production Run is one bounded, task-scoped request for PostFader to carry
 out a multi-stage production objective. The connected AI client reads the
 user's chat, inspects the open project, and submits a typed request plus a

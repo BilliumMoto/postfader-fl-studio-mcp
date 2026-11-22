@@ -1,5 +1,7 @@
 # Early-user activation guide
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 This guide is for the first external users and maintainers helping them
 activate PostFader V12 (12.0.3), with 85 tools and 8 resources. Record the
 package version and source commit for source installs, and consult the

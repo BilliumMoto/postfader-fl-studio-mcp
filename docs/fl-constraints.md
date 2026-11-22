@@ -1,5 +1,7 @@
 # FL Studio constraints
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 These FL Studio 2026 MIDI-scripting behaviors determine what FL Studio MCP
 Bridge can safely expose. They are runtime constraints, not musical policy.
 

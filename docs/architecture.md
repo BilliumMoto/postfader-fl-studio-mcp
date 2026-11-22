@@ -1,5 +1,7 @@
 # Architecture
 
+> **Fork note.** This fork of PostFader removes Piano Roll scripting, plug-in preset selection, and the TCP and file mailbox transports; it reaches FL Studio only over MIDI, and has 80 tools. Passages below that describe those features, and tool counts below, apply to upstream PostFader, not to this fork. See [FORK.md](../FORK.md).
+
 PostFader is a local stdio MCP server connected to an FL Studio MIDI
 controller script. The current surface contains 85 tools and 8 resources
 (see the [tool reference](tools.md)). It is organized as a verified control kernel, a production-workflow layer, and
