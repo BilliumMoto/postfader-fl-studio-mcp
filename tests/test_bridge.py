@@ -226,42 +226,99 @@ def check_source_is_ascii():
 
 
 def check_transport_selection():
-    """TCP is preferred, and an unusable socket must fall through to files.
-
-    Inside FL the socket type cannot construct at all, so the fallback is the
-    only thing that makes the bridge reachable. Both paths are checked here.
+    """Tested feature: the FL script starts only its MIDI SysEx transport.
+    Check: with the TCP and file transports able to start, _start_server picks MIDI and builds neither, and a MIDI failure leaves no transport.
+    Mocks: the fake FL modules in tests/fakefl, plus stand-ins for the TCP, file and failing MIDI transport classes.
+    Test would be deprecated if: the FL script starts the TCP or file transport again.
     """
     section("transport selection")
-    import tempfile
+    constructed = []
 
-    bridge._start_server()
-    check("prefers TCP when sockets work", bridge._transport.name == "tcp",
-          bridge._transport.name)
-    bridge.OnDeInit()
-
-    class Unusable:
-        name = "tcp"
+    class Startable:
+        def __init__(self, *_args, **_kwargs):
+            constructed.append(self.name)
 
         def start(self):
-            raise SystemError(
-                "<slot wrapper '__init__' of '_socket.socket' objects> "
-                "returned NULL without setting an exception")
+            return "stand-in"
 
-    mailbox = tempfile.mkdtemp(prefix="flmcp-sel-")
-    real_cls, real_box = bridge._SocketTransport, bridge.MAILBOX
-    bridge._SocketTransport, bridge.MAILBOX = Unusable, mailbox
+        def close(self):
+            pass
+
+    class SocketStandIn(Startable):
+        name = "tcp"
+
+    class FileStandIn(Startable):
+        name = "files"
+
+    class FailingMidi:
+        name = "midi"
+
+        def start(self):
+            raise RuntimeError("no MIDI port")
+
+    real_socket, real_file, real_midi = (
+        bridge._SocketTransport, bridge._FileTransport, bridge._MidiTransport
+    )
+    bridge._SocketTransport, bridge._FileTransport = SocketStandIn, FileStandIn
     try:
         bridge._start_server()
-        check("falls back to files when sockets are unusable",
-              bridge._transport.name == "files", bridge._transport.name)
-        check("mailbox is usable",
-              os.path.isfile(os.path.join(mailbox, bridge.ALIVE_NAME)),
-              os.listdir(mailbox))
+        check("starts the MIDI transport", bridge._transport.name == "midi",
+              bridge._transport.name)
+        check("builds neither the TCP nor the file transport",
+              constructed == [], constructed)
+        bridge.OnDeInit()
+        bridge._MidiTransport = FailingMidi
+        bridge._start_server()
+        check("a MIDI failure leaves no transport instead of another one",
+              bridge._transport.name == "none" and constructed == [],
+              (bridge._transport.name, constructed))
         bridge.OnDeInit()
     finally:
-        bridge._SocketTransport, bridge.MAILBOX = real_cls, real_box
-        import shutil
-        shutil.rmtree(mailbox, ignore_errors=True)
+        bridge._SocketTransport, bridge._FileTransport, bridge._MidiTransport = (
+            real_socket, real_file, real_midi
+        )
+
+
+def start_tcp_fake_bridge():
+    """Start the bridge's TCP transport directly as this file's fake FL link.
+
+    The FL script's own startup builds only MIDI, so these checks construct
+    the TCP transport themselves instead of calling OnInit.
+    """
+    transport = bridge._SocketTransport()
+    transport.start()
+    bridge._transport = transport
+
+def check_removed_commands():
+    """Tested feature: the FL script refuses the Piano Roll and preset selection commands this fork removed.
+    Check: each removed command is in no command list or HANDLERS and dispatch refuses it without listing it, with write mode both off and on, and ping stops advertising Piano Roll navigation.
+    Mocks: the fake FL modules in tests/fakefl.
+    Test would be deprecated if: the FL script accepts Piano Roll targeting or preset selection again.
+    """
+    section("commands removed by this fork are refused")
+    writable = _load_bridge_with_writes()
+    removed = (
+        "creative.prepare_piano_roll",
+        "creative.piano_roll_target",
+        "plugin.select_preset",
+    )
+    for module, mode in ((bridge, "write mode off"), (writable, "write mode on")):
+        listed = (
+            module.READ_ONLY_COMMANDS
+            | module.SESSION_CONTROL_COMMANDS
+            | module.NAVIGATION_COMMANDS
+            | module.LEAN_WRITE_COMMANDS
+        )
+        for command in removed:
+            response = module._dispatch({"id": 7, "cmd": command, "args": {}})
+            check("%s is refused with %s" % (command, mode),
+                  command not in listed and command not in module.HANDLERS
+                  and isinstance(response, dict) and response["ok"] is False
+                  and command not in response["available"],
+                  response)
+    ping = bridge._dispatch({"id": 8, "cmd": "ping", "args": {}})
+    check("ping does not advertise Piano Roll navigation",
+          ping["ok"] and "piano_roll_navigation" not in ping["result"], ping)
 
 
 def check_scan_params(c):
@@ -491,7 +548,12 @@ def check_scan_params(c):
 
 
 def check_lean_writes(c):
-    """The ten verified write commands: gate, master guard, and proof rules.
+    """Tested feature: the FL script's verified writes are gated, guarded, and proved by readback.
+    Check: a bridge copy loaded with writes exposes exactly the published write set, which excludes preset selection, and each write's gate, master guard and readback hold.
+    Mocks: the fake FL modules in tests/fakefl.
+    Test would be deprecated if: the FL script's verified write surface is removed.
+
+    The ten verified write commands: gate, master guard, and proof rules.
 
     `c` is the live client talking to the bridge copy this process loaded
     *without* FL_BRIDGE_ENABLE_WRITES, which is what proves the commands are
@@ -520,7 +582,6 @@ def check_lean_writes(c):
               "mixer.set_send_level",
               "plugin.set_param", "plugin.set_param_display",
               "plugin.set_param_option",
-              "plugin.select_preset",
               "transport.set_playing", "transport.stop",
               "transport.set_song_position", "transport.set_loop_mode",
               "transport.set_tempo", "transport.set_recording",
@@ -1594,7 +1655,13 @@ def check_display_unit_solver():
 
 
 def check_track_b():
-    """Track B against stateful fake FL APIs, including failure paths."""
+    """Tested feature: the FL script's pattern, Playlist, channel, marker and automation commands behave as published.
+    Check: each command runs against stateful fake FL APIs, including failure paths, and its result and FL state are checked.
+    Mocks: the fake FL modules in tests/fakefl.
+    Test would be deprecated if: these commands are removed from the FL script.
+
+    Track B against stateful fake FL APIs, including failure paths.
+    """
     import channels as fake_channels
     import midi as fake_midi
     import mixer as fake_mixer
@@ -1698,132 +1765,7 @@ def check_track_b():
           playlist_same["result"]["verified"] and selection_calls == [2],
           (playlist_same, selection_calls))
 
-    section("creative targeting, section markers and automation boundaries")
-    absent = object()
-    saved_open_event_editor = getattr(fake_ui, "openEventEditor", absent)
-    saved_rec_chan_piano_roll = getattr(fake_midi, "REC_Chan_PianoRoll", absent)
-    saved_ee_pr = getattr(fake_midi, "EE_PR", absent)
-    saved_get_rec_event_id = fake_channels.getRecEventId
-    saved_show_window = fake_ui.showWindow
-    event_calls = []
-    rec_event_calls = []
-    show_window_calls = []
-
-    def recording_get_rec_event_id(index, *args):
-        rec_event_calls.append((index, args))
-        return saved_get_rec_event_id(index, *args)
-
-    def recording_open_event_editor(event_id, flags):
-        event_calls.append((event_id, flags))
-        _state.VISIBLE_WINDOWS.add(fake_midi.widPianoRoll)
-
-    def recording_show_window(window):
-        show_window_calls.append(window)
-        return saved_show_window(window)
-
-    fake_channels.getRecEventId = recording_get_rec_event_id
-    fake_ui.openEventEditor = recording_open_event_editor
-    fake_midi.REC_Chan_PianoRoll = 2048
-    fake_midi.EE_PR = 77
-    try:
-        event_target, event_target_yields = drive(
-            w,
-            "creative.prepare_piano_roll",
-            channel=2,
-            pattern=3,
-            index_scope="global",
-            session_fingerprint=session,
-        )
-        check("Piano Roll event editor targets requested global channel",
-              event_target["ok"] and event_target_yields == 1
-              and rec_event_calls == [(2, ())]
-              and event_calls == [
-                  (saved_get_rec_event_id(2) + fake_midi.REC_Chan_PianoRoll,
-                   fake_midi.EE_PR)
-              ]
-              and event_target["result"]["selected_target_verified"]
-              and event_target["result"]["piano_roll_visibility_verified"] is True,
-              (event_target, rec_event_calls, event_calls))
-
-        repeated_event_target, repeated_event_target_yields = drive(
-            w,
-            "creative.prepare_piano_roll",
-            channel=2,
-            pattern=3,
-            index_scope="global",
-            session_fingerprint=session,
-        )
-        check("Piano Roll preparation is idempotent for a visible matching target",
-              repeated_event_target["ok"]
-              and repeated_event_target_yields == 1
-              and rec_event_calls == [(2, ())]
-              and event_calls == [
-                  (saved_get_rec_event_id(2) + fake_midi.REC_Chan_PianoRoll,
-                   fake_midi.EE_PR)
-              ]
-              and repeated_event_target["result"]["piano_roll_visible_before"] is True
-              and repeated_event_target["result"]["piano_roll_visible_after"] is True
-              and repeated_event_target["result"]["selected_target_verified"]
-              and repeated_event_target["result"]["piano_roll_visibility_verified"] is True,
-              (repeated_event_target, rec_event_calls, event_calls))
-
-        delattr(fake_ui, "openEventEditor")
-        fake_ui.showWindow = recording_show_window
-        fallback_target, fallback_target_yields = drive(
-            w,
-            "creative.prepare_piano_roll",
-            channel=0,
-            pattern=3,
-            index_scope="global",
-            session_fingerprint=session,
-        )
-        check("Piano Roll falls back to showWindow when event editor is unavailable",
-              fallback_target["ok"] and fallback_target_yields == 1
-              and show_window_calls == [fake_midi.widPianoRoll]
-              and fallback_target["result"]["selected_target_verified"]
-              and fallback_target["result"]["piano_roll_visibility_verified"] is True,
-              (fallback_target, show_window_calls))
-    finally:
-        fake_channels.getRecEventId = saved_get_rec_event_id
-        if saved_open_event_editor is absent:
-            try:
-                delattr(fake_ui, "openEventEditor")
-            except AttributeError:
-                pass
-        else:
-            fake_ui.openEventEditor = saved_open_event_editor
-        if saved_rec_chan_piano_roll is absent:
-            try:
-                delattr(fake_midi, "REC_Chan_PianoRoll")
-            except AttributeError:
-                pass
-        else:
-            fake_midi.REC_Chan_PianoRoll = saved_rec_chan_piano_roll
-        if saved_ee_pr is absent:
-            try:
-                delattr(fake_midi, "EE_PR")
-            except AttributeError:
-                pass
-        else:
-            fake_midi.EE_PR = saved_ee_pr
-        fake_ui.showWindow = saved_show_window
-
-    target, target_yields = drive(
-        w,
-        "creative.prepare_piano_roll",
-        channel=0,
-        pattern=3,
-        index_scope="global",
-        session_fingerprint=session,
-    )
-    check("Piano Roll target selection is later-tick verified",
-          target["ok"] and target_yields == 1
-          and target["result"]["selected_target_verified"]
-          and target["result"]["piano_roll_visibility_verified"] is True
-          and target["result"]["after_channel_indices"] == [0]
-          and target["result"]["after_pattern_number"] == 3,
-          (target, target_yields))
-
+    section("section markers and automation boundaries")
     marker, marker_yields = drive(
         w,
         "arrangement.add_markers",
@@ -3106,7 +3048,13 @@ def check_mixer_count_sentinel(c):
 
 
 def check_project_load_lifecycle():
-    """Project switches cancel old work without touching new project indices."""
+    """Tested feature: a project switch in FL cancels the bridge's old work without touching the new project.
+    Check: jobs, notes, transport buffers and write authorization from the old project are dropped or refused across load events, while fresh reads and writes work.
+    Mocks: the fake FL modules in tests/fakefl.
+    Test would be deprecated if: the FL script stops tracking project-load epochs.
+
+    Project switches cancel old work without touching new project indices.
+    """
     import channels as fake_channels
     import tempfile
 
@@ -3222,11 +3170,6 @@ def check_project_load_lifecycle():
                               confirm_user_present=True, session_fingerprint=initial)
         check("old project authorization cannot enable the newly loaded project",
               not old_enable["ok"] and not w.LEAN_WRITES_ENABLED, old_enable)
-        navigation = dispatch(w, "creative.prepare_piano_roll", channel=0,
-                              pattern=1, index_scope="global", session_fingerprint=current)
-        check("fresh Piano Roll navigation works with project write mode closed",
-              navigation["ok"] and navigation["result"]["selected_target_verified"]
-              and not w.LEAN_WRITES_ENABLED, navigation)
         enabled = dispatch(w, "session.set_write_mode", enabled=True,
                            confirm_user_present=True, session_fingerprint=current)
         stale_write = dispatch(w, "pattern.select", pattern=2, session_fingerprint=initial)
@@ -3344,7 +3287,8 @@ def main():
     check_project_load_lifecycle()
     _state.reset()
     check_transport_selection()
-    bridge.OnInit()
+    check_removed_commands()
+    start_tcp_fake_bridge()
     bridge.OnIdle()
     port = bridge._transport.server.getsockname()[1]
     c = Client(port)

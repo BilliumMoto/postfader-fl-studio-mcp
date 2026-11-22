@@ -490,8 +490,6 @@ class ClientFramingTests(unittest.TestCase):
         transport.midi_out = sink
         transport._open = lambda: True
         client = bridge_client.BridgeClient(
-            port=1,
-            mailbox="/nonexistent",
             midi_port="unused",
         )
         client._transports = [transport]
@@ -650,8 +648,6 @@ class ClientFramingTests(unittest.TestCase):
 
     def test_current_client_accepts_current_correlated_bridge_response(self):
         client = bridge_client.BridgeClient(
-            port=1,
-            mailbox="/nonexistent",
             midi_port="unused",
         )
         transport = bridge_client._MidiTransport("unused", timeout=1)

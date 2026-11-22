@@ -910,7 +910,7 @@ class ReadOnlyInspectorTests(unittest.TestCase):
             def close(self):
                 pass
 
-        client = BridgeClient(port=1, mailbox="/nonexistent", midi_port="none")
+        client = BridgeClient(midi_port="none")
         client._active = DummyTransport()
         client._id = MAX_WIRE_ID - 1
         self.assertEqual(client.call("ping")["rid"], MAX_WIRE_ID)
@@ -924,6 +924,11 @@ class ReadOnlyInspectorTests(unittest.TestCase):
             inspector.project_summary()
 
     def test_mcp_surface_is_exactly_the_published_tool_set(self):
+        """Tested feature: the server registers exactly the published tools, without the ones this fork removed.
+        Check: the listed tool names equal the union of the expected groups, number 80, exclude the Piano Roll and preset selection tools, and carry honest annotations.
+        Mocks: none.
+        Test would be deprecated if: the server's tool surface stops being a fixed, published set.
+        """
         # This used to be a blanket ban on any tool whose name contained
         # "set_", which encoded a product that could only read. The narrowly
         # scoped mutations are now part of the surface, so the guard is an
@@ -1000,7 +1005,6 @@ class ReadOnlyInspectorTests(unittest.TestCase):
             "plugin_set_parameter",
         }
         production_mutating_tools = {
-            "plugin_select_preset",
             "plugin_load",
             "processing_apply",
             "sound_apply_palette",
@@ -1012,15 +1016,11 @@ class ReadOnlyInspectorTests(unittest.TestCase):
             "pattern_create",
             "playlist_add_markers",
             "automation_record_value",
-            "piano_roll_write_notes",
-            "piano_roll_transform_notes",
         }
         workflow_state_tools = {
             "plugin_list_available",
             "mixer_start_peak_watch",
             "mixer_stop_peak_watch",
-            "piano_roll_setup",
-            "piano_roll_read_notes",
             "render_start_job",
             "render_cancel_job",
             "run_stop",
@@ -1048,12 +1048,20 @@ class ReadOnlyInspectorTests(unittest.TestCase):
         )
         self.assertEqual(sum(len(group) for group in groups), len(set().union(*groups)))
         self.assertEqual(names, set().union(*groups))
-        self.assertEqual(len(names), 85)
+        self.assertEqual(len(names), 80)
+        removed_by_fork = {
+            "piano_roll_setup",
+            "piano_roll_read_notes",
+            "piano_roll_write_notes",
+            "piano_roll_transform_notes",
+            "plugin_select_preset",
+        }
+        self.assertEqual(names & removed_by_fork, set())
         # Every name is <area>_<verb>[_<object>] over a fixed set of areas.
         areas = (
             "session_", "project_", "transport_", "mixer_", "channel_", "pattern_",
             "playlist_", "automation_", "plugin_", "atlas_", "processing_", "sound_",
-            "audio_", "compose_", "piano_roll_", "run_", "review_", "render_",
+            "audio_", "compose_", "run_", "review_", "render_",
         )
         self.assertEqual([name for name in names if not name.startswith(areas)], [])
         # Only documented saved-project rendering is exposed; no generic

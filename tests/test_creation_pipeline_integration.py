@@ -39,6 +39,7 @@ from fl_studio_mcp.creation_pipeline.processing import (
     evaluate_effect_coverage,
 )
 from fl_studio_mcp.creation_pipeline.readiness import CreationReadinessService
+from fl_studio_mcp.fork_removals import PIANO_ROLL_REMOVED
 from fl_studio_mcp.plugin_atlas import load_bundled_registry
 from fl_studio_mcp.sound_selection.models import (
     SoundInventory,
@@ -389,6 +390,11 @@ class CreationPipelineIntegrationTests(unittest.TestCase):
         self.assertFalse(coverage.loaded_capabilities[0].controllable)
 
     def test_live_preflight_collects_one_discovered_inventory_snapshot(self) -> None:
+        """Tested feature: the live creation preflight reads the project and sound inventory once and keeps that snapshot.
+        Check: connection, project, patterns and inventory are each read once, presets are discovered, and the collected context holds the same inventory.
+        Mocks: the read-only inspector, pattern inspector, sound service and MIDI port query; Piano Roll status is the fork's real removed status.
+        Test would be deprecated if: the creation preflight stops collecting a single inventory snapshot.
+        """
         connection = ConnectionInfo(
             connected=True,
             compatible=True,
@@ -421,20 +427,7 @@ class CreationPipelineIntegrationTests(unittest.TestCase):
         )
         sound = mock.Mock()
         sound.inventory.return_value = inventory
-        piano_status = SimpleNamespace(
-            script_exists=True,
-            armed_this_session=True,
-            last_request_id="armed-request",
-            setup_instruction="",
-            automatic_trigger_supported=True,
-        )
-
-        with (
-            mock.patch.object(
-                live_readiness.PIANO_ROLL, "status", return_value=piano_status
-            ),
-            mock.patch.object(live_readiness, "midi_port_query", return_value="PF"),
-        ):
+        with mock.patch.object(live_readiness, "midi_port_query", return_value="PF"):
             collected = collect_creation_readiness(
                 operations=(),
                 completion_target_text="A playable draft.",
@@ -456,6 +449,27 @@ class CreationPipelineIntegrationTests(unittest.TestCase):
             collected.context_snapshot.sound_inventory.model_dump(mode="json"),
             inventory.model_dump(mode="json"),
         )
+
+    def test_piano_roll_readiness_reports_the_fork_removal(self) -> None:
+        """Tested feature: creation readiness reports Piano Roll scripting as removed instead of offering a setup step.
+        Check: when note writes are required, readiness is unarmed and unsupported with the removal as its warning and no manual action; when they are not, it adds no warning.
+        Mocks: none; the fork's Piano Roll status reports the removal itself.
+        Test would be deprecated if: this fork restores Piano Roll scripting.
+        """
+        required = live_readiness._piano_roll_readiness(
+            (SimpleNamespace(operation="write_note_sequence"),)
+        )
+        self.assertTrue(required.required)
+        self.assertFalse(required.armed_this_process)
+        self.assertFalse(required.apply_script_present)
+        self.assertFalse(required.target_selection_supported)
+        self.assertIsNone(required.manual_action)
+        self.assertEqual(required.warnings, (PIANO_ROLL_REMOVED,))
+        not_required = live_readiness._piano_roll_readiness(
+            (SimpleNamespace(operation="generate_melody"),)
+        )
+        self.assertFalse(not_required.required)
+        self.assertEqual(not_required.warnings, ())
 
     def test_one_preflight_context_and_inventory_are_reused_across_phases(self) -> None:
         registry = runs.ProductionRunRegistry()

@@ -386,47 +386,12 @@ class CreationReviewProductionRunTests(unittest.TestCase):
         self.assertEqual(result.attempted_count, 0)
         self.assertEqual(result.write_mode_enable_count, 0)
 
-    def test_revision_adapter_inherits_run_authorization_unless_explicitly_set(self) -> None:
-        revision_request = RevisionRequest(
-            source_evaluation_id="evaluation-1",
-            source_run_id="source-run",
-            requested_objective="Record the accepted element.",
-            allowed_changes=("record_feedback_lock",),
-        )
-        revision_plan = RevisionPlan(
-            revision_plan_id="revision-1",
-            review_session_id="review-1",
-            source_evaluation_id="evaluation-1",
-            source_run_id="source-run",
-            operations=(RecordFeedbackLockOperation(operation_id="lock"),),
-        )
-        for explicit, inherited, expected in (
-            (None, True, True),
-            (None, False, False),
-            (False, True, False),
-            (True, True, True),
-        ):
-            with self.subTest(explicit=explicit, inherited=inherited):
-                kwargs = {} if explicit is None else {"authorized_to_modify": explicit}
-                operation = runs.ApplyCreationRevisionOperation(
-                    operation_id="apply",
-                    review_session="review-1",
-                    plan=revision_plan,
-                    request=revision_request,
-                    **kwargs,
-                )
-                with mock.patch.object(review_api, "review_apply_revision") as apply:
-                    runs._dispatch_operation(
-                        operation,
-                        session_fingerprint=None,
-                        outputs={},
-                        authorized_to_modify=inherited,
-                    )
-                self.assertIs(
-                    apply.call_args.args[0].authorized_to_modify, expected
-                )
-
-    def test_outer_apply_adapter_leaves_write_boundary_to_revision_executor(self) -> None:
+    def test_outer_apply_creation_revision_is_refused_before_dispatch(self) -> None:
+        """Tested feature: a run that applies a creation revision is refused before anything runs, because this fork removed Piano Roll note writes.
+        Check: executing a plan with apply_creation_revision is blocked by the removal blocker, with no dispatch and no write-mode change.
+        Mocks: operation dispatch and the write-mode manager, as recorders that must not be called.
+        Test would be deprecated if: this fork restores Piano Roll note writes.
+        """
         revision_request = RevisionRequest(
             source_evaluation_id="evaluation-1",
             source_run_id="source-run",
@@ -466,13 +431,18 @@ class CreationReviewProductionRunTests(unittest.TestCase):
         registry = runs.ProductionRunRegistry(max_runs=2)
         with mock.patch.object(
             runs, "_dispatch_operation", return_value=fake_pass
-        ), mock.patch.object(
+        ) as dispatch, mock.patch.object(
             runs.WriteModeManager,
             "set_write_mode",
             side_effect=AssertionError("outer run enabled write mode"),
         ):
             result = registry.execute(_request(), plan)
-        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.status, "blocked")
+        self.assertIn(
+            "operation_removed_in_fork", {item.code for item in result.blockers}
+        )
+        self.assertEqual(result.attempted_count, 0)
+        dispatch.assert_not_called()
         self.assertEqual(result.write_mode_enable_count, 0)
         self.assertEqual(result.write_mode_disable_count, 0)
 

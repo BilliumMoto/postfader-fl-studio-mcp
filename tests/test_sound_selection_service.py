@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
+from fl_studio_mcp.fork_removals import PRESET_SELECTION_REMOVED
 from fl_studio_mcp.sound_selection.executor import (
     SoundSelectionAuthorizationError,
     SoundSelectionService,
@@ -222,7 +223,12 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertEqual(inventory.loaded_generators[0].target_fingerprint, TARGET_FINGERPRINT)
             self.assertEqual(inventory.loaded_generators[0].pad_map.mapped_notes, (("kick", 36), ("snare", 38)))
 
-    def test_apply_authorization_session_and_write_mode_are_explicit_and_reused(self):
+    def test_apply_checks_authorization_and_session_then_refuses_preset_roles(self):
+        """Tested feature: palette application checks authorization and session, then refuses a palette whose role would select a preset.
+        Check: missing authorization or a wrong session raises, and an authorized apply fails with the preset-removal blocker without enabling write mode, selecting a preset, or writing history.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: this fork restores preset selection.
+        """
         with TemporaryDirectory() as directory:
             service, inspector, controller, mode, history = self.make_service(directory)
             request = SoundSelectionRequest(
@@ -255,20 +261,26 @@ class SoundSelectionServiceTests(unittest.TestCase):
                 service.apply(plan, session_fingerprint=None, authorized_to_modify=True)
             with self.assertRaises(SoundSelectionSessionError):
                 service.apply(plan, session_fingerprint="c" * 32, authorized_to_modify=True)
+            self.assertEqual(plan.assignments[0].selection_action, "select_preset")
+            scans_before = inspector.scans
             first = service.apply(plan, session_fingerprint=SESSION, authorized_to_modify=True)
-            second = service.apply(plan.palette_id, session_fingerprint=SESSION, authorized_to_modify=True)
-            self.assertEqual(first.status, "applied")
-            self.assertEqual(second.status, "applied")
+            self.assertEqual(first.status, "failed")
             self.assertEqual(first.state.palette_id, plan.palette_id)
-            self.assertEqual(first.state.apply_receipts[0].role_id, "main_lead")
-            self.assertEqual(len(mode.calls), 1)
-            self.assertEqual(len(controller.calls), 1)
-            self.assertEqual(len(first.receipts), 1)
-            self.assertIsInstance(first.receipts[0], VerifiedPluginPresetSelection)
-            self.assertEqual(len(history.usage_calls), 1)
-            self.assertGreaterEqual(inspector.scans, 2)  # each apply has a live preflight
+            self.assertIn(PRESET_SELECTION_REMOVED, " ".join(first.blockers))
+            self.assertIn("'main_lead'", " ".join(first.blockers))
+            self.assertEqual(first.receipts, ())
+            self.assertEqual(first.history_written, 0)
+            self.assertEqual(mode.calls, [])
+            self.assertEqual(controller.calls, [])
+            self.assertEqual(history.usage_calls, [])
+            self.assertEqual(inspector.scans, scans_before)  # refused before preflight
 
-    def test_scoped_apply_and_explicitly_pre_enabled_mode(self):
+    def test_scoped_preset_role_refuses_even_with_write_mode_pre_enabled(self):
+        """Tested feature: a scoped palette apply refuses a role that would select a preset, even when write mode is already on, and unknown palettes are reported as missing.
+        Check: applying only the preset role with write_mode_already_enabled fails with the removal blocker and no controller or write-mode call, and a lookup of an unknown palette finds nothing.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: this fork restores preset selection.
+        """
         with TemporaryDirectory() as directory:
             service, _, controller, mode, _ = self.make_service(directory)
             request = SoundSelectionRequest(
@@ -299,28 +311,36 @@ class SoundSelectionServiceTests(unittest.TestCase):
                 role_ids=("main_lead",),
                 write_mode_already_enabled=True,
             )
-            self.assertEqual(result.status, "applied")
+            self.assertEqual(result.status, "failed")
+            self.assertIn(PRESET_SELECTION_REMOVED, " ".join(result.blockers))
             self.assertEqual(len(mode.calls), 0)
-            self.assertEqual(len(controller.calls), 1)
+            self.assertEqual(len(controller.calls), 0)
             missing = service.lookup("palette-does-not-exist")
             self.assertFalse(missing.found)
             self.assertTrue(missing.process_local)
             self.assertIsNone(missing.state)
             self.assertIn("another process", missing.message)
 
-    def test_persist_history_false_and_unverified_stop_without_retry(self):
+    def test_persist_history_false_writes_no_usage_history(self):
+        """Tested feature: a palette planned with persist_history=False applies without writing usage history.
+        Check: a keep-current palette applies, and no usage record is written or reported.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palettes stop recording usage history.
+        """
         with TemporaryDirectory() as directory:
             service, inspector, controller, mode, history = self.make_service(directory)
             request = SoundSelectionRequest(
                 brief="lead",
                 persist_history=False,
-                roles=(SoundRoleRequest(role_id="main_lead", role_type="lead", preferred_presets=("Bright Lead",)),),
+                roles=(SoundRoleRequest(role_id="main_lead", role_type="lead", preferred_presets=("Current",)),),
             )
             plan = service.plan(request)
+            self.assertEqual(plan.assignments[0].selection_action, "keep_current")
             result = service.apply(plan, session_fingerprint=SESSION, authorized_to_modify=True)
+            self.assertEqual(result.status, "applied")
             self.assertEqual(result.history_written, 0)
             self.assertEqual(len(history.usage_calls), 0)
-            self.assertEqual(len(controller.calls), 1)
+            self.assertEqual(len(controller.calls), 0)
 
     def test_feedback_status_and_reset_are_local_explicit_wrappers(self):
         with TemporaryDirectory() as directory:
@@ -332,52 +352,6 @@ class SoundSelectionServiceTests(unittest.TestCase):
                 service.history_reset(confirm=False)
             reset = service.history_reset(confirm=True)
             self.assertFalse(reset.recoverable)
-
-    def test_replanning_identical_palette_preserves_completed_receipts(self):
-        with TemporaryDirectory() as directory:
-            service, _, controller, _, _ = self.make_service(directory)
-            request = SoundSelectionRequest(
-                brief="bright lead",
-                roles=(
-                    SoundRoleRequest(
-                        role_id="main_lead",
-                        role_type="lead",
-                        preferred_presets=("Bright Lead",),
-                    ),
-                ),
-            )
-            inventory = SoundInventory(
-                session_fingerprint=SESSION,
-                loaded_generators=(
-                    SoundTargetInventory(
-                        target=TARGET,
-                        target_fingerprint=TARGET_FINGERPRINT,
-                        product_id="synthetic",
-                        product_name="Synthetic Synth",
-                        current_preset="Current",
-                        current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
-                        preset_navigation_available=True,
-                        preset_identity_stable=True,
-                        preset_readback_available=True,
-                    ),
-                ),
-            )
-            plan = service.plan(request, inventory=inventory)
-            applied = service.apply(
-                plan,
-                session_fingerprint=SESSION,
-                authorized_to_modify=True,
-            )
-            original_receipt = applied.state.apply_receipts[0]
-
-            repeated = service.plan(request, inventory=inventory)
-            state = service.get(repeated.palette_id)
-
-            self.assertEqual(repeated.palette_id, plan.palette_id)
-            self.assertEqual(state.apply_receipts, (original_receipt,))
-            self.assertEqual(len(controller.calls), 1)
 
     def test_keep_current_is_verified_history_and_feedback_updates_state(self):
         with TemporaryDirectory() as directory:
@@ -434,9 +408,14 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertFalse(feedback.persisted)
             self.assertEqual(len(state.accepted_feedback), 1)
 
-    def test_section_variation_is_registered_and_applies_only_its_delta(self):
+    def test_section_variation_is_registered_and_its_preset_delta_refuses(self):
+        """Tested feature: a section variation is registered on its base palette, and applying a delta that selects a preset refuses.
+        Check: the variation has one assignment, applying it fails with the removal blocker over exactly that assignment and no controller call, and the base palette records the variation.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: this fork restores preset selection.
+        """
         with TemporaryDirectory() as directory:
-            service, _, _, _, _ = self.make_service(directory)
+            service, _, controller, _, _ = self.make_service(directory)
             request = SoundSelectionRequest(
                 brief="vary the texture in the drop",
                 roles=(
@@ -481,11 +460,11 @@ class SoundSelectionServiceTests(unittest.TestCase):
             )
             state = service.get(plan.palette_id)
 
+            self.assertEqual(variation.assignments[0].selection_action, "select_preset")
+            self.assertEqual(applied.status, "failed")
+            self.assertIn(PRESET_SELECTION_REMOVED, " ".join(applied.blockers))
             self.assertEqual(applied.assignment_scope, variation.assignments)
-            self.assertEqual(
-                applied.assignment_receipts[-1].assignment_id,
-                variation.assignments[0].assignment_id,
-            )
+            self.assertEqual(controller.calls, [])
             self.assertEqual(state.section_variations[0].variation_id, variation.variation_id)
 
     def test_inventory_filters_effects_before_per_target_reads(self):
@@ -558,6 +537,11 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertEqual(inspector.current_reads, 3)
 
     def test_apply_fails_closed_without_live_connection_proof(self):
+        """Tested feature: palette application fails closed when the live connection cannot be revalidated.
+        Check: a keep-current palette applied through an inspector without connection proof fails with the revalidation blocker and no controller or write-mode call.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palette application stops revalidating the live session.
+        """
         with TemporaryDirectory() as directory:
             service, inspector, controller, mode, _ = self.make_service(directory)
             inventory = SoundInventory(
@@ -569,8 +553,8 @@ class SoundSelectionServiceTests(unittest.TestCase):
                         product_name="Synthetic Synth",
                         current_preset="Current",
                         current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
+                        preset_names=("Current",),
+                        preset_indices=(0,),
                         preset_navigation_available=True,
                         preset_identity_stable=True,
                         preset_readback_available=True,
@@ -584,7 +568,7 @@ class SoundSelectionServiceTests(unittest.TestCase):
                         SoundRoleRequest(
                             role_id="main_lead",
                             role_type="lead",
-                            preferred_presets=("Bright Lead",),
+                            preferred_presets=("Current",),
                         ),
                     ),
                 ),
@@ -599,56 +583,6 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertIn("session revalidation is unavailable", " ".join(result.blockers))
             self.assertEqual(controller.calls, [])
             self.assertEqual(mode.calls, [])
-
-    def test_unknown_preset_outcome_is_recorded_and_never_replayed(self):
-        with TemporaryDirectory() as directory:
-            service, _, controller, _, _ = self.make_service(directory)
-            inventory = SoundInventory(
-                session_fingerprint=SESSION,
-                loaded_generators=(
-                    SoundTargetInventory(
-                        target=TARGET,
-                        target_fingerprint=TARGET_FINGERPRINT,
-                        product_name="Synthetic Synth",
-                        current_preset="Current",
-                        current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
-                        preset_navigation_available=True,
-                        preset_identity_stable=True,
-                        preset_readback_available=True,
-                    ),
-                ),
-            )
-            plan = service.plan(
-                SoundSelectionRequest(
-                    brief="bright lead",
-                    roles=(
-                        SoundRoleRequest(
-                            role_id="main_lead",
-                            role_type="lead",
-                            preferred_presets=("Bright Lead",),
-                        ),
-                    ),
-                ),
-                inventory=inventory,
-            )
-
-            def ambiguous(**kwargs):
-                controller.calls.append(kwargs)
-                raise TimeoutError("synthetic unknown transport outcome")
-
-            controller.select_plugin_preset = ambiguous
-            first = service.apply(plan, SESSION, True)
-            second = service.apply(plan.palette_id, SESSION, True)
-            self.assertEqual(first.status, "failed")
-            self.assertFalse(first.assignment_receipts[0].verified)
-            self.assertEqual(second.status, "failed")
-            self.assertIn(
-                "no automatic retry",
-                second.assignment_receipts[0].verification_summary,
-            )
-            self.assertEqual(len(controller.calls), 1)
 
     def test_keep_current_requires_stable_live_identity(self):
         with TemporaryDirectory() as directory:
@@ -701,132 +635,6 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertIn("not stable", " ".join(result.blockers))
             self.assertEqual(controller.calls, [])
             self.assertEqual(mode.calls, [])
-
-    def test_apply_rejects_current_read_for_replaced_target(self):
-        with TemporaryDirectory() as directory:
-            service, inspector, controller, mode, _ = self.make_service(directory)
-            inventory = SoundInventory(
-                session_fingerprint=SESSION,
-                loaded_generators=(
-                    SoundTargetInventory(
-                        target=TARGET,
-                        target_fingerprint=TARGET_FINGERPRINT,
-                        product_name="Synthetic Synth",
-                        current_preset="Current",
-                        current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
-                        preset_navigation_available=True,
-                        preset_identity_stable=True,
-                        preset_readback_available=True,
-                    ),
-                ),
-            )
-            plan = service.plan(
-                SoundSelectionRequest(
-                    brief="bright lead",
-                    roles=(
-                        SoundRoleRequest(
-                            role_id="main_lead",
-                            role_type="lead",
-                            preferred_presets=("Bright Lead",),
-                        ),
-                    ),
-                ),
-                inventory=inventory,
-            )
-
-            replaced_summary = inspector.summary.model_copy(
-                update={"target_fingerprint": "c" * 64}
-            )
-
-            def replaced_current(*, target, allow_master=False):
-                return PluginCurrentPreset(
-                    observed_at=STAMP,
-                    plugin=replaced_summary,
-                    preset_count=2,
-                    current_preset_name="Current",
-                    current_preset_index=0,
-                    current_preset_status="stable",
-                    session_fingerprint=SESSION,
-                )
-
-            inspector.get_plugin_current_preset = replaced_current
-            result = service.apply(plan, SESSION, True)
-
-            self.assertEqual(result.status, "failed")
-            self.assertIn("target identity changed", " ".join(result.blockers))
-            self.assertEqual(controller.calls, [])
-            self.assertEqual(len(mode.calls), 1)
-
-    def test_verified_receipt_must_match_assignment_and_is_never_retried(self):
-        with TemporaryDirectory() as directory:
-            service, _, controller, _, _ = self.make_service(directory)
-            inventory = SoundInventory(
-                session_fingerprint=SESSION,
-                loaded_generators=(
-                    SoundTargetInventory(
-                        target=TARGET,
-                        target_fingerprint=TARGET_FINGERPRINT,
-                        product_name="Synthetic Synth",
-                        current_preset="Current",
-                        current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
-                        preset_navigation_available=True,
-                        preset_identity_stable=True,
-                        preset_readback_available=True,
-                    ),
-                ),
-            )
-            plan = service.plan(
-                SoundSelectionRequest(
-                    brief="bright lead",
-                    roles=(
-                        SoundRoleRequest(
-                            role_id="main_lead",
-                            role_type="lead",
-                            preferred_presets=("Bright Lead",),
-                        ),
-                    ),
-                ),
-                inventory=inventory,
-            )
-            original_select = controller.select_plugin_preset
-
-            def contradictory_receipt(**kwargs):
-                valid = original_select(**kwargs)
-                return valid.model_copy(
-                    update={
-                        "requested_preset_name": "Wrong Preset",
-                        "requested_preset_index": 9,
-                        "after": PluginPresetState(
-                            name="Wrong Preset",
-                            index=9,
-                            identity_status="stable",
-                        ),
-                    }
-                )
-
-            controller.select_plugin_preset = contradictory_receipt
-            first = service.apply(plan, SESSION, True)
-            second = service.apply(plan.palette_id, SESSION, True)
-
-            self.assertEqual(first.status, "failed")
-            self.assertFalse(first.assignment_receipts[0].verified)
-            self.assertIn(
-                "contradicts the exact palette assignment",
-                first.assignment_receipts[0].verification_summary,
-            )
-            self.assertIn(
-                "no automatic retry", first.assignment_receipts[0].verification_summary
-            )
-            self.assertEqual(second.status, "failed")
-            self.assertIn(
-                "no automatic retry",
-                second.assignment_receipts[0].verification_summary,
-            )
-            self.assertEqual(len(controller.calls), 1)
 
     def test_supplied_state_cannot_replace_process_local_state(self):
         with TemporaryDirectory() as directory:
@@ -885,6 +693,11 @@ class SoundSelectionServiceTests(unittest.TestCase):
             self.assertEqual(mode.calls, [])
 
     def test_full_receipt_registry_blocks_before_mutation(self):
+        """Tested feature: palette application stops before any FL call when its receipt registry is full.
+        Check: a keep-current palette whose registry already holds the maximum receipts fails with the bound blocker and no controller or write-mode call.
+        Mocks: the FL inspector, controller, write-mode manager and history, replaced with recording fakes.
+        Test would be deprecated if: palette receipts stop being bounded.
+        """
         with TemporaryDirectory() as directory:
             service, _, controller, mode, _ = self.make_service(directory)
             inventory = SoundInventory(
@@ -896,8 +709,8 @@ class SoundSelectionServiceTests(unittest.TestCase):
                         product_name="Synthetic Synth",
                         current_preset="Current",
                         current_preset_index=0,
-                        preset_names=("Current", "Bright Lead"),
-                        preset_indices=(0, 1),
+                        preset_names=("Current",),
+                        preset_indices=(0,),
                         preset_navigation_available=True,
                         preset_identity_stable=True,
                         preset_readback_available=True,
@@ -911,7 +724,7 @@ class SoundSelectionServiceTests(unittest.TestCase):
                         SoundRoleRequest(
                             role_id="main_lead",
                             role_type="lead",
-                            preferred_presets=("Bright Lead",),
+                            preferred_presets=("Current",),
                         ),
                     ),
                 ),

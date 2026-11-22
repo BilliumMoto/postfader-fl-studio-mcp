@@ -432,5 +432,28 @@ class DoctorEvidenceTests(unittest.TestCase):
         self.assertEqual(captured["FL_BRIDGE_MIDI_PORT"], "Exact Fixture Port")
 
 
+
+class NativeMidiProbeTests(unittest.TestCase):
+    def test_native_midi_probe_child_opens_no_console_window(self):
+        """Tested feature: the doctor's MIDI port probe child opens no console window on Windows.
+        Check: the probe passes CREATE_NO_WINDOW on Windows, or 0 elsewhere, as the child's creation flags, and returns the ports it printed.
+        Mocks: subprocess.run, so no child is started.
+        Test would be deprecated if: the doctor stops probing MIDI ports in a child process.
+        """
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout='{"in": ["A"], "out": ["B"]}', stderr=""
+        )
+        with mock.patch.object(
+            diagnostics.subprocess, "run", return_value=completed
+        ) as run:
+            ports = diagnostics._native_midi_probe()
+        self.assertEqual(ports, {"in": ["A"], "out": ["B"]})
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

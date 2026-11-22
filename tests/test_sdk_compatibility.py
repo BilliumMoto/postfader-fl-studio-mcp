@@ -320,21 +320,6 @@ class MCPCompatibilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, "Extra inputs are not permitted"):
                     asyncio.run(invoke())
 
-    def test_note_pagination_rejects_invalid_bounds_before_adapter(self) -> None:
-        with mock.patch.object(
-            server_module, "read_piano_roll_notes",
-            side_effect=AssertionError("invalid SDK input must never reach FL inspection"),
-        ) as adapter:
-            for invalid_page in (
-                {"offset": -1}, {"offset": 1_000_001},
-                {"limit": 0}, {"limit": 2049},
-            ):
-                with self.subTest(page=invalid_page), self.assertRaises(Exception):
-                    asyncio.run(mcp.call_tool("piano_roll_read_notes", {
-                        "channel_index": 0, "pattern_number": 1, **invalid_page,
-                    }))
-                adapter.assert_not_called()
-
     def test_render_request_rejects_unknown_nested_options_before_adapter(self) -> None:
         with mock.patch.object(
             server_module, "get_saved_project_render_jobs",

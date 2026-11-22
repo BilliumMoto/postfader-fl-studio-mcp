@@ -36,11 +36,20 @@ from fl_studio_mcp.creative import (
     NoteSequence,
     PianoRollDispatch,
     PianoRollScriptRuntimeEvidence,
+    PianoRollTransform,
     compose_melody,
     make_sequence,
     note_digest,
 )
-from fl_studio_mcp.track_b_contracts import VerifiedPatternSelectionWrite
+from fl_studio_mcp.fork_removals import (
+    PIANO_ROLL_REMOVED,
+    PRESET_SELECTION_REMOVED,
+    FeatureRemovedError,
+)
+from fl_studio_mcp.track_b_contracts import (
+    MixerEffectTarget,
+    VerifiedPatternSelectionWrite,
+)
 
 
 SESSION = "a" * 32
@@ -375,20 +384,18 @@ class ProductionRunTests(unittest.TestCase):
             dispatch.assert_called_once()
 
     def test_valid_multi_operation_plan_has_order_and_capabilities(self) -> None:
+        """Tested feature: a valid multi-operation plan validates with its operation order, digest and required capabilities.
+        Check: a composition step followed by a pattern selection validates with no blockers, in plan order, with the plan's digest and both steps' capabilities.
+        Mocks: none.
+        Test would be deprecated if: Production Run validation stops reporting order, digest or capabilities.
+        """
         production_plan = plan(
             chords("drop_chords"),
-            runs.WriteNoteSequenceOperation(
-                operation_id="write_drop_chords",
-                sequence=runs.OperationOutputReference(
-                    operation_id="drop_chords", output="note_sequence"
-                ),
-                channel_index=2,
-                pattern_number=4,
-            ),
+            select_pattern("select_drop_pattern", 4),
         )
 
         validation = runs.validate_production_run(
-            request(allowed_changes=("composition", "notes")),
+            request(allowed_changes=("composition", "pattern_metadata")),
             production_plan,
             inspect_live=False,
         )
@@ -396,14 +403,14 @@ class ProductionRunTests(unittest.TestCase):
         self.assertTrue(validation.valid)
         self.assertEqual(
             validation.resolved_operation_order,
-            ("drop_chords", "write_drop_chords"),
+            ("drop_chords", "select_drop_pattern"),
         )
         self.assertEqual(
             validation.plan_digest, runs.production_plan_digest(production_plan)
         )
         self.assertIn("host_side_creative_generation", validation.required_capabilities)
         self.assertIn(
-            "armed_piano_roll_script_bridge", validation.required_capabilities
+            "pattern_selection_and_metadata", validation.required_capabilities
         )
         self.assertEqual(validation.blockers, ())
 
@@ -768,182 +775,6 @@ class ProductionRunTests(unittest.TestCase):
         self.assertEqual(continued.write_mode_disable_count, 2)
         self.assertFalse(continued.write_mode_active)
         self.assertEqual(dispatch.call_count, 2)
-
-    def test_continuation_rebuilds_readiness_for_revised_request_from_cached_facts(
-        self,
-    ) -> None:
-        connection = ConnectionInfo(
-            connected=True,
-            compatible=True,
-            compatibility_reason="ok",
-            bridge_transport="midi",
-            bridge_mode="read_only",
-            runtime_write_mode_control=True,
-            bridge_provenance="matching",
-            bridge_provenance_verified=True,
-            session_fingerprint=SESSION,
-        )
-        project = ProjectSummary(
-            observed_at=datetime.now(timezone.utc),
-            connection=connection,
-            mixer_track_count=8,
-            channel_count=8,
-            pattern_count=8,
-            playlist_track_count=8,
-            transport=TransportState(playing=False, recording=False),
-        )
-        piano = PianoRollReadiness(
-            required=True,
-            apply_script_present=True,
-            armed_this_process=True,
-            authenticated_arming_receipt=True,
-            arming_receipt_id="piano-receipt",
-            target_selection_supported=True,
-            persistence_receipt_supported=True,
-        )
-        missing = MissingProcessingCapability(
-            category="requested_first_pass_processing",
-            reason="No compatible Mixer effects were observed as loaded.",
-            required_for_completion=True,
-            classification="blocking",
-        )
-        effects = EffectCoverageReport(
-            roles=(
-                RoleEffectCoverage(
-                    role_id="project",
-                    state="missing_requested_effect",
-                    missing_capabilities=(missing,),
-                    processing_required_for_completion=True,
-                ),
-            ),
-            missing_capabilities=(missing,),
-            completion_target="mix_ready",
-            processing_required_for_completion=True,
-            can_produce_dry_draft=True,
-            state="missing_requested_effect",
-        )
-        readiness_connection = ConnectionReadiness(
-            connection_info=connection,
-            mcp_process_identity=MCP_PROCESS_IDENTITY,
-            midi_endpoint="Postfader",
-            midi_input_available=True,
-            midi_output_available=True,
-            queue_healthy=True,
-            supported_fl_build=True,
-            runtime_write_mode_control=True,
-            current_write_state="disabled",
-            require_process_identity=True,
-            require_midi=True,
-        )
-        context = build_context_snapshot(
-            session_fingerprint=SESSION,
-            project=project,
-            mcp_process_identity=MCP_PROCESS_IDENTITY,
-            piano_roll_arming_receipt=PianoRollArmingReceipt(
-                receipt_id="piano-receipt",
-                process_identity=MCP_PROCESS_IDENTITY,
-                authenticated=True,
-                script_present=True,
-            ),
-        )
-        facts = CreationReadinessInput(
-            connection=readiness_connection,
-            project=project,
-            piano_roll=piano,
-            effects=effects,
-            completion_target="mix_ready",
-            processing_required=True,
-            context_snapshot=context,
-            project_checkpoint_digest=context.project_checkpoint.digest,
-        )
-        initial_report = runs.CreationReadinessService().evaluate(facts)
-        collection = CollectedCreationReadiness(
-            readiness_input=facts,
-            context_snapshot=context,
-            sound_inventory=None,
-            loaded_processing_observations=(),
-            full_inventory_scan_count=1,
-            target_refresh_count=0,
-            preset_enumeration_count=0,
-            connection=connection,
-            project=project,
-        )
-        revised_request = request(allowed_changes=("notes",)).model_copy(
-            update={"completion_target": "A playable draft."}
-        )
-        write = runs.WriteNoteSequenceOperation(
-            operation_id="write-notes",
-            sequence=sequence(),
-            channel_index=1,
-            pattern_number=2,
-            mode="replace",
-        )
-        registry = runs.ProductionRunRegistry()
-        mode = mock.Mock()
-        mode.set_write_mode.return_value = SimpleNamespace(
-            session_fingerprint=SESSION,
-            after_enabled=True,
-        )
-        with (
-            mock.patch.object(
-                runs, "_collect_run_readiness", return_value=(initial_report, collection)
-            ) as collect,
-            mock.patch.object(
-                runs, "_capture_project_state",
-                return_value=(runs._project_state_digest(project), ""),
-            ),
-            mock.patch.object(runs, "_current_session_matches", return_value=(True, "")),
-            mock.patch.object(runs, "WriteModeManager", return_value=mode),
-            mock.patch.object(
-                runs, "_dispatch_operation", return_value=verified_selection()
-            ) as dispatch,
-        ):
-            first = registry.execute(
-                request(
-                    allowed_changes=("composition", "notes"),
-                ).model_copy(
-                    update={"completion_target": "A mix-ready production."}
-                ),
-                plan(
-                    melody("compose"),
-                    runs.WriteNoteSequenceOperation(
-                        operation_id="initial-notes",
-                        sequence=sequence(),
-                        channel_index=1,
-                        pattern_number=2,
-                    ),
-                ),
-            )
-            before = registry.get(first.run_id)
-            assert before.state is not None
-            continued = registry.continue_run(
-                first.run_id,
-                runs.ProductionRunDelta(
-                    mode="replace_remaining",
-                    operations=(write,),
-                    request=revised_request,
-                ),
-            )
-
-        self.assertEqual(first.status, "blocked")
-        self.assertIn("required_processing_missing", {item.code for item in first.blockers})
-        self.assertEqual(continued.status, "completed")
-        self.assertNotIn(
-            "required_processing_missing", {item.code for item in continued.blockers}
-        )
-        self.assertIsNotNone(continued.readiness_report)
-        assert continued.readiness_report is not None
-        self.assertEqual(continued.readiness_report.overall_state, "ready_with_limitations")
-        self.assertEqual(collect.call_count, 1)
-        self.assertEqual(dispatch.call_count, 1)
-        after = registry.get(first.run_id)
-        assert after.state is not None
-        assert after.state.run_context is not None
-        self.assertEqual(
-            after.state.run_context.mcp_process_identity,
-            MCP_PROCESS_IDENTITY,
-        )
-        self.assertEqual(after.state.receipts[0].operation_id, "write-notes")
 
     def test_validation_and_plan_only_do_not_enable_write_mode(self) -> None:
         mode = mock.Mock()
@@ -1757,6 +1588,11 @@ class ProductionRunTests(unittest.TestCase):
     def test_existing_operation_adapters_delegate_to_postfader_implementations(
         self,
     ) -> None:
+        """Tested feature: run operations dispatch to PostFader's existing implementations, and a note write is refused instead.
+        Check: generation, pattern preparation and verified batches call their implementations with the operation's arguments, while dispatching a note write raises FeatureRemovedError without calling the Piano Roll writer.
+        Mocks: the composer, pattern preparer, Piano Roll writer and verified batch executor.
+        Test would be deprecated if: Production Runs stop adapting operations to these implementations.
+        """
         generated = sequence()
         generate = melody("generate")
         with mock.patch.object(
@@ -1810,20 +1646,13 @@ class ProductionRunTests(unittest.TestCase):
         with mock.patch.object(
             runs, "write_piano_roll_notes", return_value=object()
         ) as writer:
-            write_result = runs._dispatch_operation(
-                write,
-                session_fingerprint=SESSION,
-                outputs=reference_outputs,
-            )
-        self.assertIsNotNone(write_result)
-        writer.assert_called_once_with(
-            generated.notes,
-            channel_index=3,
-            pattern_number=5,
-            mode="replace",
-            auto_trigger=True,
-            session_fingerprint=SESSION,
-        )
+            with self.assertRaises(FeatureRemovedError):
+                runs._dispatch_operation(
+                    write,
+                    session_fingerprint=SESSION,
+                    outputs=reference_outputs,
+                )
+        writer.assert_not_called()
 
         batch = runs.ApplyVerifiedBatchOperation(
             operation_id="batch",
@@ -1854,68 +1683,61 @@ class ProductionRunTests(unittest.TestCase):
             session_fingerprint=SESSION,
         )
 
-    def test_unarmed_piano_roll_operations_share_one_concise_setup_blocker(
-        self,
-    ) -> None:
+    def test_plans_using_removed_features_block_before_any_write(self) -> None:
+        """Tested feature: a run plan that needs Piano Roll scripting or preset selection is refused before anything is written.
+        Check: validation reports one removal blocker per removed operation and none for the others, and executing the plan is blocked with no dispatch, live validation or write-mode change.
+        Mocks: live validation, operation dispatch and the write-mode manager, as recorders that must not be called.
+        Test would be deprecated if: this fork restores Piano Roll scripting or preset selection.
+        """
+        target = MixerEffectTarget(track_index=3, slot_index=0)
         production_plan = plan(
+            melody("compose"),
             runs.WriteNoteSequenceOperation(
-                operation_id="write_one",
+                operation_id="write",
                 sequence=sequence(),
                 channel_index=1,
                 pattern_number=2,
             ),
-            runs.WriteNoteSequenceOperation(
-                operation_id="write_two",
-                sequence=sequence(),
-                channel_index=2,
-                pattern_number=3,
+            runs.TransformPianoRollOperation(
+                operation_id="transform",
+                transform=PianoRollTransform(operation="transpose", semitones=12),
+                channel_index=1,
+                pattern_number=2,
+            ),
+            runs.SelectPluginPresetOperation(
+                operation_id="preset", target=target, preset_name="Bright Lead"
+            ),
+            runs.SelectDrumKitOperation(
+                operation_id="kit", target=target, preset_name="House Kit"
             ),
         )
-        connection = ConnectionInfo(
-            connected=True,
-            compatible=True,
-            compatibility_reason="ok",
-            runtime_write_mode_control=True,
-            bridge_provenance_verified=True,
-            session_fingerprint=SESSION,
+        validation = runs.validate_production_run(
+            request(), production_plan, inspect_live=False
         )
-        project = ProjectSummary(
-            observed_at=datetime.now(timezone.utc),
-            connection=connection,
-            mixer_track_count=8,
-            channel_count=8,
-            pattern_count=8,
-            playlist_track_count=8,
-            transport=TransportState(playing=False, recording=False),
-        )
-        inspector = mock.Mock()
-        inspector.connection_info.side_effect = [connection, connection]
-        inspector.project_summary.return_value = project
-        piano_status = SimpleNamespace(
-            armed_this_session=False,
-            setup_instruction="Prepare and confirm the Piano Roll script once.",
-        )
-        pattern_inventory = SimpleNamespace(maximum_pattern_number=8, patterns=[])
-        track_inspector = mock.Mock()
-        track_inspector.list_patterns.return_value = pattern_inventory
-        with (
-            mock.patch.object(runs, "ReadOnlyInspector", return_value=inspector),
-            mock.patch.object(runs, "TrackBInspector", return_value=track_inspector),
-            mock.patch.object(runs.PIANO_ROLL, "status", return_value=piano_status),
-        ):
-            validation = runs.validate_production_run(
-                request(allowed_changes=("notes",)),
-                production_plan,
-                inspect_live=True,
-            )
-
-        piano_blockers = [
-            item
+        removed = {
+            item.operation_id: item
             for item in validation.blockers
-            if item.code == "piano_roll_bridge_not_armed"
-        ]
-        self.assertEqual(len(piano_blockers), 1)
-        self.assertIn("one setup step", piano_blockers[0].message)
+            if item.code == "operation_removed_in_fork"
+        }
+        self.assertFalse(validation.valid)
+        self.assertEqual(set(removed), {"write", "transform", "preset", "kit"})
+        self.assertIn(PIANO_ROLL_REMOVED, removed["write"].message)
+        self.assertIn(PIANO_ROLL_REMOVED, removed["transform"].message)
+        self.assertIn(PRESET_SELECTION_REMOVED, removed["preset"].message)
+        self.assertIn(PRESET_SELECTION_REMOVED, removed["kit"].message)
+
+        registry = runs.ProductionRunRegistry()
+        with (
+            mock.patch.object(runs, "_live_validation") as live,
+            mock.patch.object(runs, "_dispatch_operation") as dispatch,
+            mock.patch.object(runs, "WriteModeManager") as mode,
+        ):
+            result = registry.execute(request(), production_plan)
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.attempted_count, 0)
+        live.assert_not_called()
+        dispatch.assert_not_called()
+        mode.assert_not_called()
 
     def test_live_pattern_validation_uses_pattern_maximum_not_used_count(
         self,
@@ -1980,37 +1802,6 @@ class ProductionRunTests(unittest.TestCase):
             len(second.state.generated_outputs[0].value.notes),
             original_count,
         )
-
-    def test_generated_sequence_can_feed_a_later_write_operation(self) -> None:
-        generated = runs._dispatch_operation(
-            chords("harmony"),
-            session_fingerprint=None,
-            outputs={},
-        )
-        self.assertIsInstance(generated, NoteSequence)
-        outputs = {
-            "harmony": runs.ProductionGeneratedOutput(
-                operation_id="harmony",
-                value=generated,
-            )
-        }
-        write = runs.WriteNoteSequenceOperation(
-            operation_id="write_harmony",
-            sequence=runs.OperationOutputReference(
-                operation_id="harmony", output="note_sequence"
-            ),
-            channel_index=2,
-            pattern_number=4,
-        )
-        with mock.patch.object(
-            runs, "write_piano_roll_notes", return_value=object()
-        ) as writer:
-            runs._dispatch_operation(
-                write,
-                session_fingerprint=SESSION,
-                outputs=outputs,
-            )
-        self.assertEqual(writer.call_args.args[0], generated.notes)
 
     def test_invalid_plan_performs_zero_project_mutations(self) -> None:
         registry = runs.ProductionRunRegistry()
