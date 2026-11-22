@@ -52,7 +52,7 @@ def configuration_facts(
     repository_root: str | os.PathLike[str],
     interpreter: str | os.PathLike[str],
     user_data_dir: str | os.PathLike[str] | None = None,
-    transport: TransportSelection = "automatic",
+    transport: TransportSelection = "midi",
     midi_port: str | None = None,
     server_name: str = "fl-studio",
     environ: Mapping[str, str] | None = None,
@@ -88,11 +88,14 @@ def configuration_facts(
             }
         )
     elif transport == "automatic":
-        if midi_port is not None and midi_port.strip():
-            raise HostConfigurationError(
-                "--midi-port requires --transport midi; automatic transport "
-                "must not silently enable a physical MIDI endpoint"
-            )
+        # This build reaches FL Studio only over MIDI, so a configuration that
+        # leaves MIDI off could never connect.
+        raise HostConfigurationError(
+            "transport 'automatic' is not available in this build, which "
+            "reaches FL Studio only over MIDI; a configuration without MIDI "
+            "could never connect. Use --transport midi with --midi-port naming "
+            "the virtual MIDI port."
+        )
     else:
         raise HostConfigurationError(
             "transport must be 'automatic' or 'midi'; got %r" % transport

@@ -5987,6 +5987,15 @@ def _dispatch(req):
             "writes"
         )
     available = sorted(allowed)
+    # Answer a command this bridge has no handler for, including the ones this
+    # fork removed, as unknown before the lock check, so the reply does not
+    # suggest that enabling write mode would make it available.
+    handler = HANDLERS.get(cmd)
+    if handler is None:
+        return response(
+            {"id": rid, "ok": False, "error": "unknown command %r" % cmd,
+             "available": available}
+        )
     if cmd not in allowed:
         return response({
             "id": rid,
@@ -5994,12 +6003,6 @@ def _dispatch(req):
             "error": "%s; command %r is prohibited" % (lock_reason, cmd),
             "available": available,
         })
-    handler = HANDLERS.get(cmd)
-    if handler is None:
-        return response(
-            {"id": rid, "ok": False, "error": "unknown command %r" % cmd,
-             "available": available}
-        )
     try:
         result = handler(args)
         if isinstance(result, types.GeneratorType):

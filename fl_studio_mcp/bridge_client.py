@@ -210,6 +210,10 @@ class BridgeCommandError(BridgeError):
     """A matching bridge response explicitly reported a command failure."""
 
 
+class RemovedTransportSettingsError(BridgeError):
+    """A setting of the TCP or file mailbox transport, which this fork removed, is set."""
+
+
 class BridgeUnavailableError(BridgeError):
     """No bridge transport is currently reachable."""
 
@@ -1137,10 +1141,13 @@ class BridgeClient:
             name for name in REMOVED_TRANSPORT_SETTINGS if name in os.environ
         ]
         if removed_settings:
-            raise BridgeError(
+            # test_removed_transport_settings_refuse_until_unset follows the
+            # advice by unsetting the variable and constructing the client
+            # again; restarting a real MCP server needs no further test.
+            raise RemovedTransportSettingsError(
                 "%s %s set, but this build connects to the bridge only over "
                 "MIDI SysEx and has no TCP or file mailbox transport to apply "
-                "%s to. Unset %s."
+                "%s to. Unset %s and restart the MCP server."
                 % (
                     ", ".join(removed_settings),
                     "is" if len(removed_settings) == 1 else "are",

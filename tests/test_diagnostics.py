@@ -265,6 +265,44 @@ class DoctorEvidenceTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(json.loads(stdout.getvalue()), evidence)
 
+    def test_removed_transport_setting_is_reported_with_accurate_advice(self):
+        """Tested feature: the doctor reports a removed transport's setting as the cause, with advice to unset it, rather than blaming FL Studio.
+        Check: a live probe refused by RemovedTransportSettingsError fails with removed_transport_setting and the unset advice, and following it, the same doctor run with a working probe passes.
+        Mocks: the doctor's live probe and MIDI probe, plus a fake FL user-data folder and FL executable.
+        Test would be deprecated if: the fork restores the TCP or file mailbox transport.
+        """
+        from fl_studio_mcp.bridge_client import RemovedTransportSettingsError
+
+        def refused_probe():
+            raise RemovedTransportSettingsError("FL_BRIDGE_PORT is set")
+
+        values = {"FL_BRIDGE_MIDI_PORT": "Chosen Port"}
+        ports = {"in": ["Chosen Port"], "out": ["Chosen Port"]}
+        evidence = diagnostics.collect_evidence(
+            user_data_dir=self.user_data,
+            platform_name="win32",
+            environ=values,
+            fl_candidates=[self.fl_candidate],
+            midi_probe=lambda: ports,
+            live_probe=refused_probe,
+        )
+        self.assertEqual(evidence["overall"], "fail")
+        failures = {item["code"]: item for item in evidence["failures"]}
+        self.assertIn("removed_transport_setting", failures)
+        self.assertNotIn("live_bridge_unavailable", failures)
+        self.assertIn("Unset FL_BRIDGE_HOST", failures["removed_transport_setting"]["action"])
+        self.assertNotIn("Start FL Studio", failures["removed_transport_setting"]["action"])
+
+        evidence = diagnostics.collect_evidence(
+            user_data_dir=self.user_data,
+            platform_name="win32",
+            environ=values,
+            fl_candidates=[self.fl_candidate],
+            midi_probe=lambda: ports,
+            live_probe=self.live_value,
+        )
+        self.assertEqual(evidence["overall"], "pass")
+
     def test_custom_absolute_executable_is_reported_as_explicit(self):
         custom = Path(self.tmp.name) / "Custom Image-Line" / "FL64.exe"
         custom.parent.mkdir(parents=True)

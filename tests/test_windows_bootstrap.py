@@ -32,7 +32,7 @@ from fl_studio_mcp.host_config import HostConfigurationError  # noqa: E402
 
 
 class ClientConfigurationTests(unittest.TestCase):
-    def facts(self, root: Path, *, transport="automatic", midi_port=None):
+    def facts(self, root: Path, *, transport="midi", midi_port="Chosen Loopback"):
         interpreter = root / "venv with spaces" / "Scripts" / "python.exe"
         user_data = root / "Documents" / "Image-Line" / "FL Studio"
         return configuration_facts(
@@ -45,13 +45,29 @@ class ClientConfigurationTests(unittest.TestCase):
             platform_name="win32",
         )
 
-    def test_automatic_transport_does_not_silently_enable_midi_or_writes(self):
+    def test_automatic_transport_is_refused_and_midi_is_the_way_to_connect(self):
+        """Tested feature: client configuration refuses the automatic transport, which in this build could never connect, and points to MIDI.
+        Check: automatic is refused with a message naming --transport midi, and following it, a midi configuration with a port succeeds without enabling writes; the generator's default is midi.
+        Mocks: the platform and environment, fixed to Windows with no variables.
+        Test would be deprecated if: this build gains a transport other than MIDI.
+        """
         with tempfile.TemporaryDirectory(prefix="postfader-config-") as raw:
-            facts = self.facts(Path(raw))
-        self.assertEqual(
-            set(facts.environment), {"FL_STUDIO_USER_DATA_DIR"}
-        )
+            with self.assertRaisesRegex(HostConfigurationError, "--transport midi"):
+                self.facts(Path(raw), transport="automatic", midi_port=None)
+            facts = self.facts(
+                Path(raw), transport="midi", midi_port="Chosen Loopback"
+            )
+            default = configuration_facts(
+                repository_root=Path(raw),
+                interpreter=Path(raw) / "python.exe",
+                user_data_dir=Path(raw) / "FL Studio",
+                midi_port="Chosen Loopback",
+                environ={},
+                platform_name="win32",
+            )
+        self.assertEqual(facts.environment["FL_BRIDGE_ENABLE_MIDI"], "1")
         self.assertNotIn("FL_BRIDGE_ENABLE_WRITES", facts.environment)
+        self.assertEqual(default.transport, "midi")
 
     def test_midi_transport_emits_both_explicit_transport_facts(self):
         with tempfile.TemporaryDirectory(prefix="postfader-config-") as raw:
@@ -63,13 +79,6 @@ class ClientConfigurationTests(unittest.TestCase):
             facts.environment["FL_BRIDGE_MIDI_PORT"], "Chosen Loopback"
         )
         self.assertNotIn("FL_BRIDGE_ENABLE_WRITES", facts.environment)
-
-    def test_midi_port_without_midi_transport_is_refused(self):
-        with tempfile.TemporaryDirectory(prefix="postfader-config-") as raw:
-            with self.assertRaisesRegex(
-                HostConfigurationError, "requires --transport midi"
-            ):
-                self.facts(Path(raw), midi_port="Must Not Be Enabled")
 
     def test_codex_toml_and_claude_json_share_absolute_facts(self):
         with tempfile.TemporaryDirectory(prefix="postfader-config-") as raw:
@@ -143,6 +152,42 @@ class ClientConfigurationTests(unittest.TestCase):
         self.assertTrue(Path(server["env"]["FL_STUDIO_USER_DATA_DIR"]).is_absolute())
         self.assertEqual(server["env"]["FL_BRIDGE_MIDI_PORT"], "Chosen Loopback")
         self.assertNotIn("FL_BRIDGE_ENABLE_WRITES", server["env"])
+
+    def test_generator_cli_refuses_automatic_and_succeeds_with_midi(self):
+        """Tested feature: the config generator refuses --transport automatic with advice, and following that advice works.
+        Check: the CLI exits 1 naming --transport midi for automatic, and the same command with --transport midi exits 0 with MIDI enabled.
+        Mocks: none; the generator runs as a child process with made-up absolute paths.
+        Test would be deprecated if: this build gains a transport other than MIDI.
+        """
+        with tempfile.TemporaryDirectory(prefix="postfader generator ") as raw:
+            root = Path(raw)
+            command = [
+                sys.executable,
+                os.fspath(ROOT / "scripts" / "generate_mcp_config.py"),
+                "--format",
+                "codex-toml",
+                "--repository-root",
+                os.fspath(root),
+                "--python",
+                os.fspath(root / "venv" / "Scripts" / "python.exe"),
+                "--user-data-dir",
+                os.fspath(root / "Documents" / "Image-Line" / "FL Studio"),
+                "--midi-port",
+                "Chosen Loopback",
+            ]
+            refused = subprocess.run(
+                [*command, "--transport", "automatic"],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            accepted = subprocess.run(
+                [*command, "--transport", "midi"],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+        self.assertEqual(refused.returncode, 1, refused.stdout)
+        self.assertIn("--transport midi", refused.stderr)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        server = tomllib.loads(accepted.stdout)["mcp_servers"]["fl-studio"]
+        self.assertEqual(server["env"]["FL_BRIDGE_ENABLE_MIDI"], "1")
 
     def test_generator_default_interpreter_is_native_to_selected_platform(self):
         path = ROOT / "scripts" / "generate_mcp_config.py"

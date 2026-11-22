@@ -291,7 +291,7 @@ def start_tcp_fake_bridge():
 
 def check_removed_commands():
     """Tested feature: the FL script refuses the Piano Roll and preset selection commands this fork removed.
-    Check: each removed command is in no command list or HANDLERS and dispatch refuses it without listing it, with write mode both off and on, and ping stops advertising Piano Roll navigation.
+    Check: each removed command is in no command list or HANDLERS and dispatch answers it as an unknown command, without listing it or blaming the write lock, with write mode both off and on, while a known write command is still refused by the lock; ping stops advertising Piano Roll navigation.
     Mocks: the fake FL modules in tests/fakefl.
     Test would be deprecated if: the FL script accepts Piano Roll targeting or preset selection again.
     """
@@ -311,11 +311,16 @@ def check_removed_commands():
         )
         for command in removed:
             response = module._dispatch({"id": 7, "cmd": command, "args": {}})
-            check("%s is refused with %s" % (command, mode),
+            check("%s is refused as unknown with %s" % (command, mode),
                   command not in listed and command not in module.HANDLERS
                   and isinstance(response, dict) and response["ok"] is False
+                  and response["error"] == "unknown command %r" % command
+                  and "prohibited" not in response["error"]
                   and command not in response["available"],
                   response)
+    locked = bridge._dispatch({"id": 9, "cmd": "mixer.set_volume", "args": {}})
+    check("a known write command is still refused by the read-only lock",
+          locked["ok"] is False and "is prohibited" in locked["error"], locked)
     ping = bridge._dispatch({"id": 8, "cmd": "ping", "args": {}})
     check("ping does not advertise Piano Roll navigation",
           ping["ok"] and "piano_roll_navigation" not in ping["result"], ping)

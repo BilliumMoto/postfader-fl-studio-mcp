@@ -981,16 +981,21 @@ class MidiOnlyClientTests(unittest.TestCase):
 
     def test_removed_transport_settings_refuse_until_unset(self):
         """Tested feature: the client refuses to start while a TCP or file mailbox setting is set, instead of ignoring it.
-        Check: with each of FL_BRIDGE_HOST, FL_BRIDGE_PORT and FL_BRIDGE_MAILBOX set, construction raises naming it and saying to unset it; after unsetting, construction succeeds.
+        Check: with each of FL_BRIDGE_HOST, FL_BRIDGE_PORT and FL_BRIDGE_MAILBOX set, construction raises naming it and saying to unset it and restart the MCP server; after unsetting, construction succeeds.
         Test would be deprecated if: the fork restores the TCP or file mailbox transport.
         """
         for name in bridge_client.REMOVED_TRANSPORT_SETTINGS:
             with self.subTest(setting=name):
                 with mock.patch.dict(os.environ, {name: "unused"}):
-                    with self.assertRaises(BridgeError) as refused:
+                    with self.assertRaises(
+                        bridge_client.RemovedTransportSettingsError
+                    ) as refused:
                         BridgeClient(midi_port="Configured Loopback")
+                    self.assertIsInstance(refused.exception, BridgeError)
                     self.assertIn(name, str(refused.exception))
-                    self.assertIn("Unset it", str(refused.exception))
+                    self.assertIn(
+                        "Unset it and restart the MCP server", str(refused.exception)
+                    )
                     os.environ.pop(name)
                     with mock.patch.object(bridge_client, "MIDI_ENABLED", False):
                         client = BridgeClient(midi_port="Configured Loopback")
