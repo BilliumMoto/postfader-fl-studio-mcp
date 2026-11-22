@@ -372,6 +372,69 @@ class SoundSelectionServiceTests(unittest.TestCase):
         self.assertEqual(controller.reroll_calls, [])
         self.assertEqual(mode.calls, [])
 
+    def test_keep_current_refuses_when_the_live_preset_no_longer_matches(self):
+        """Tested feature: a keep-current role is recorded as kept only if FL still has the planned preset, with a stable identity.
+        Check: when the live current preset has another name, another index, or an ambiguous identity, the apply fails with the matching blocker and no controller or write-mode call.
+        Mocks: the FL inspector, whose current-preset read reports each changed state, plus the recording controller, write-mode manager and history.
+        Test would be deprecated if: keep-current roles stop being revalidated against the live preset.
+        """
+        inventory = SoundInventory(
+            session_fingerprint=SESSION,
+            loaded_generators=(
+                SoundTargetInventory(
+                    target=TARGET,
+                    target_fingerprint=TARGET_FINGERPRINT,
+                    product_name="Synthetic Synth",
+                    current_preset="Current",
+                    current_preset_index=0,
+                    preset_names=("Current",),
+                    preset_indices=(0,),
+                    preset_navigation_available=True,
+                    preset_identity_stable=True,
+                    preset_readback_available=True,
+                ),
+            ),
+        )
+        request = SoundSelectionRequest(
+            brief="keep the lead",
+            roles=(
+                SoundRoleRequest(
+                    role_id="main_lead", role_type="lead", preferred_presets=("Current",)
+                ),
+            ),
+        )
+        cases = (
+            ("Other", 0, "stable", "current preset no longer matches the plan"),
+            ("Current", 1, "stable", "current preset index no longer matches the plan"),
+            ("Current", None, "ambiguous", "current preset identity is not stable"),
+        )
+        for name, index, status, expected in cases:
+            with self.subTest(name=name, index=index, status=status):
+                with TemporaryDirectory() as directory:
+                    service, inspector, controller, mode, history = self.make_service(directory)
+                    plan = service.plan(request, inventory=inventory)
+                    self.assertEqual(plan.assignments[0].selection_action, "keep_current")
+
+                    def changed_current(*, target, allow_master=False, _summary=inspector.summary):
+                        return PluginCurrentPreset(
+                            observed_at=STAMP,
+                            plugin=_summary,
+                            preset_count=2,
+                            current_preset_name=name,
+                            current_preset_index=index,
+                            current_preset_status=status,
+                            session_fingerprint=SESSION,
+                        )
+
+                    inspector.get_plugin_current_preset = changed_current
+                    result = service.apply(plan, SESSION, True)
+
+                self.assertEqual(result.status, "failed")
+                self.assertIn(expected, " ".join(result.blockers))
+                self.assertEqual(controller.calls, [])
+                self.assertEqual(mode.calls, [])
+                self.assertEqual(history.usage_calls, [])
+
     def test_replanning_identical_palette_preserves_completed_receipts(self):
         """Tested feature: replanning the same request on the same inventory returns the same palette and keeps its receipts.
         Check: after a Loop Starter apply, an identical plan has the same palette_id and unchanged receipts, and applying it again does not reroll.

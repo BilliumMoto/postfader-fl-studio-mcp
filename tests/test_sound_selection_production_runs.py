@@ -261,6 +261,61 @@ class SoundSelectionProductionRunTests(unittest.TestCase):
             [],
         )
 
+    def test_referenced_palette_with_preset_roles_is_refused_before_write_mode(self) -> None:
+        """Tested feature: a run applying a palette planned by an earlier step is refused before write mode when a role would select a preset.
+        Check: a plan-then-apply run is blocked with the removal blocker on the apply step, the run's cursor stays on that step, and neither write mode nor the palette executor's apply is reached.
+        Mocks: the Sound Selection service (its planner returns a preset palette; its apply is a recorder), live validation, project-state capture, session matching and the write-mode manager.
+        Test would be deprecated if: this fork restores preset selection.
+        """
+        service = SimpleNamespace(
+            plan=mock.Mock(return_value=palette()),
+            apply=mock.Mock(side_effect=AssertionError("palette executor reached")),
+            lookup=mock.Mock(),
+        )
+        mode = mock.Mock()
+        registry = runs.ProductionRunRegistry()
+        plan = runs.ProductionRunPlan(
+            plan_id="referenced-palette",
+            operations=(
+                runs.PlanSoundPaletteOperation(
+                    operation_id="palette", request=sound_request()
+                ),
+                runs.ApplySoundPaletteOperation(
+                    operation_id="apply",
+                    palette=runs.OperationOutputReference(
+                        operation_id="palette", output="sound_palette"
+                    ),
+                ),
+            ),
+        )
+        with (
+            mock.patch("fl_studio_mcp.sound_selection.executor.SOUND_SELECTION", service),
+            mock.patch.object(
+                runs, "_live_validation", return_value=([], [], SESSION, PROJECT)
+            ),
+            mock.patch.object(runs, "_capture_project_state", return_value=(PROJECT, "")),
+            mock.patch.object(runs, "_current_session_matches", return_value=(True, "")),
+            mock.patch.object(runs, "_creation_plan_needs_readiness", return_value=False),
+            mock.patch.object(runs, "WriteModeManager", mode),
+        ):
+            result = registry.execute(run_request(), plan)
+        state = registry.get(result.run_id).state
+        assert state is not None
+
+        self.assertEqual(result.status, "blocked")
+        removed = [
+            item
+            for item in result.blockers
+            if item.code == "palette_preset_selection_removed"
+        ]
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(removed[0].operation_id, "apply")
+        self.assertIn(PRESET_SELECTION_REMOVED, removed[0].message)
+        self.assertEqual(state.current_operation_index, 1)
+        self.assertEqual(result.write_mode_enable_count, 0)
+        mode.return_value.set_write_mode.assert_not_called()
+        service.apply.assert_not_called()
+
     def test_incompatible_palette_reference_is_rejected(self) -> None:
         plan = runs.ProductionRunPlan(
             plan_id="bad-ref",

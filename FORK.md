@@ -7,8 +7,8 @@ FL Studio MCP server under the Apache License 2.0. Its version is
 
 This fork removes Piano Roll script generation, plug-in preset selection, and
 the TCP and file transports, so the live bridge between the server and
-FL Studio uses only MIDI. Everything else works as in upstream 12.0.3. The fork has 80 tools; upstream
-12.0.3 has 85.
+FL Studio uses only MIDI. Everything else is unchanged except the refusals
+listed below. The fork has 80 tools; upstream 12.0.3 has 85.
 
 The fork is not published to PyPI or the MCP Registry. `server.json` keeps
 upstream's registry name only because the package tests require that file to
@@ -79,8 +79,9 @@ agree with the package version.
   current preset or reroll Loop Starter. In a Production Run, an `apply_sound_palette`
   operation that carries its palette inline is refused at validation, before
   anything in the run is written. One that applies a palette produced by an
-  earlier step of the same run is refused only when it is reached, so earlier
-  operations in that run may already have applied.
+  earlier step of the same run is refused when the run reaches it, before
+  write mode is enabled or anything is dispatched for it; earlier operations
+  in that run may already have applied.
 
 ### Other
 

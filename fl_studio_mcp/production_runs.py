@@ -1649,9 +1649,10 @@ UNAVAILABLE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType(
 # refuses them as a backstop. apply_creation_revision is listed because a
 # revision may produce note writes or preset or drum-kit selections.
 # apply_sound_palette is not listed: structural validation refuses an inline
-# palette whose applied roles would select a preset, and the palette executor
-# refuses one produced by an earlier step of the run when that step reaches
-# it, by which time earlier operations in the run may already have applied.
+# palette whose applied roles would select a preset, and the runtime preflight
+# refuses one produced by an earlier step of the run when the run reaches it,
+# before write mode is enabled or anything is dispatched for it; earlier
+# operations in the run may already have applied by then.
 REMOVED_FEATURE_OPERATION_MESSAGES: Mapping[str, str] = MappingProxyType({
     "write_note_sequence": (
         "This run is blocked because write_note_sequence writes notes through "
@@ -2756,8 +2757,8 @@ def _structural_validation(
             # before anything in the run is written, if any role it would apply
             # has an action this fork cannot apply (it can only keep the current
             # preset or reroll Loop Starter). A palette produced by an earlier
-            # step is only known at dispatch, where the palette executor
-            # refuses it.
+            # step is only known when the run reaches this operation, where the
+            # runtime preflight refuses it.
             applied_role_keys = {item.casefold() for item in operation.role_ids}
             preset_roles = tuple(
                 item.role_id
@@ -5161,6 +5162,27 @@ def _runtime_preflight_blocker(
                 )
                 if denied is not None:
                     return denied
+            # This fork removed preset selection. A palette produced by an
+            # earlier step is known only now, so refuse it here, before the run
+            # enables write mode or dispatches this operation, if any role it
+            # would apply has an action this fork cannot apply.
+            preset_roles = tuple(
+                item.role_id
+                for item in palette.assignments
+                if item.selection_action not in APPLICABLE_SELECTION_ACTIONS
+                and (not selected_roles or item.role_id.casefold() in selected_roles)
+            )
+            if preset_roles:
+                return _blocker(
+                    "unsupported_by_postfader",
+                    "palette_preset_selection_removed",
+                    f"Operation {operation.operation_id!r} would select a preset for role(s) "
+                    + ", ".join(repr(item) for item in preset_roles[:16])
+                    + ". "
+                    + PRESET_SELECTION_REMOVED,
+                    operation_id=operation.operation_id,
+                    evidence=tuple(f"role={item}" for item in preset_roles[:16]),
+                )
             return None
         if isinstance(operation, WriteNoteSequenceOperation) and isinstance(
             operation.channel_index, OperationOutputReference
